@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TrustEngine — Live commerce intelligence</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<div class="orb o1"></div>
+<div class="orb o2"></div>
+<main>
+  <nav>
+    <a class="brand"><i></i> TRUSTENGINE <span>LIVE</span></a>
+    <p>Evidence-first product intelligence</p>
+  </nav>
+  
+  <section class="intro">
+    <div>
+      <p class="kicker">MULTI-MODAL COMMERCE INTELLIGENCE</p>
+      <h1>Know what the page<br><em>actually</em> says.</h1>
+      <p class="sub">Live Puppeteer browser extraction, HingBERT NLP review analysis, local 6-month price history graphs, and text + image visual match routing.</p>
+    </div>
+    <div class="rules">
+      <b>Truth protocol</b>
+      <span>01&nbsp; No simulated prices</span>
+      <span>02&nbsp; No invented reviews</span>
+      <span>03&nbsp; Missing data stays visible</span>
+    </div>
+  </section>
+  
+  <section class="search">
+    <label for="url">Product listing URL</label>
+    <div>
+      <input id="url" placeholder="Paste an Amazon, Flipkart, Meesho, Croma, Nykaa, or Myntra product URL">
+      <button id="run">Run live analysis <b>→</b></button>
+    </div>
+    <p id="status">Ready to fetch a live product page. Rendered DOM metadata & direct match routes will be extracted.</p>
+  </section>
+
+  <div id="result" hidden>
+    <section class="summary">
+      <div class="score">
+        <span id="score">—</span>
+        <small>/ 100</small>
+      </div>
+      <div class="source">
+        <p class="kicker">LIVE EXTRACTION RESULT</p>
+        <div class="product-title-row">
+          <img id="productImg" class="product-thumb" alt="Product thumbnail" hidden>
+          <div>
+            <h2 id="title">—</h2>
+            <p id="meta">—</p>
+            <p id="brandSku" class="brand-sku">—</p>
+          </div>
+        </div>
+        <a id="report" target="_blank">Download evidence report ↗</a>
+      </div>
+      <div class="verdict">
+        <p>INTEGRITY STATUS</p>
+        <strong id="verdict">—</strong>
+        <small id="confidence">—</small>
+      </div>
+    </section>
+
+    <section class="metrics">
+      <div>
+        <p>Current observed price</p>
+        <strong id="price">Unavailable</strong>
+        <small id="priceMeta">—</small>
+      </div>
+      <div>
+        <p>Lowest verified match</p>
+        <strong id="lowestPrice">None</strong>
+        <small id="lowestPriceMeta">Direct product listings only</small>
+      </div>
+      <div>
+        <p>Reported Customer Rating</p>
+        <strong id="rating">Unavailable</strong>
+        <small id="ratingMeta">—</small>
+      </div>
+      <div>
+        <p>Price trend</p>
+        <strong id="priceTrend">Stable</strong>
+        <small id="trendMeta">Based on local observations</small>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="wide">
+        <header>
+          <div>
+            <p class="kicker">BUYHATKE-STYLE 6-MONTH PRICE TRACKER & MULTI-STORE MATCHES</p>
+            <h3>Price history & multi-modal store comparison points</h3>
+          </div>
+          <div class="range-toggles">
+            <button class="btn-range" data-range="30">1M</button>
+            <button class="btn-range" data-range="90">3M</button>
+            <button class="btn-range active" data-range="180">6M</button>
+            <button class="btn-range" data-range="365">ALL</button>
+          </div>
+        </header>
+        
+        <div class="price-indicator-row">
+          <span id="priceIndicator" class="price-indicator-badge">📈 Loading 6-month historical price range…</span>
+        </div>
+
+        <div id="priceSummaryBar" class="price-summary-bar">
+          <div><small>6M Lowest</small><strong id="pMin">₹0</strong></div>
+          <div><small>6M Average</small><strong id="pAvg">₹0</strong></div>
+          <div><small>6M Highest</small><strong id="pMax">₹0</strong></div>
+          <div><small>Effective w/ Offers</small><strong id="pOffer">₹0</strong></div>
+          <div><small>Price Trend</small><strong id="pTrend">Stable</strong></div>
+        </div>
+
+        <div id="offerCard" class="offer-card">
+          <p>💳 <strong>Effective price with bank offers:</strong> <span id="offerVal">₹0</span> <small>(Includes ₹500 Instant Card Discount)</small></p>
+        </div>
+
+        <canvas id="priceChart"></canvas>
+        <div id="chartPointInfo" class="chart-point-card" hidden style="margin-top: 12px; padding: 12px; background: rgba(127, 240, 209, 0.08); border: 1px solid rgba(127, 240, 209, 0.3); border-radius: 8px; color: #e2e8f0;">
+          <strong id="chartPointTitle" style="color: #7ff0d1;">Store Point Selected</strong>
+          <p id="chartPointDesc" style="margin: 4px 0; font-size: 0.85rem; color: #9da5bb;"></p>
+          <a id="chartPointLink" href="#" target="_blank" rel="noreferrer" class="tag tag-verified" style="display: inline-block; margin-top: 6px; text-decoration: none;">Open direct product webpage ↗</a>
+        </div>
+      </article>
+      <article>
+        <header>
+          <div>
+            <p class="kicker">CROSS-PLATFORM MULTI-MODAL MATCHING</p>
+            <h3>Direct text & image match routes</h3>
+          </div>
+        </header>
+        <div id="candidates" class="items"></div>
+      </article>
+    </section>
+
+    <!-- NEW SECTION: REVIEW VELOCITY BURST Z-SCORE ANALYTICS -->
+    <section class="grid" style="margin-top: 24px;">
+      <article class="wide">
+        <header>
+          <div>
+            <p class="kicker">REVIEW VELOCITY BURST Z-SCORE ANALYTICS</p>
+            <h3>Daily review volume distribution & velocity burst anomalies</h3>
+          </div>
+        </header>
+
+        <div id="burstMetricsBar" class="price-summary-bar">
+          <div><small>Peak Review Date</small><strong id="burstPeakDate">—</strong></div>
+          <div><small>Peak Daily Volume</small><strong id="burstPeakCount">0 reviews</strong></div>
+          <div><small>Max Burst Z-Score</small><strong id="burstMaxZ">0.00</strong></div>
+          <div><small>3-Month Volume (90D)</small><strong id="burstVol90">0</strong></div>
+          <div><small>1-Year Volume (365D)</small><strong id="burstVol365">0</strong></div>
+        </div>
+
+        <canvas id="reviewBurstChart" style="margin-top: 14px; max-height: 280px;"></canvas>
+      </article>
+    </section>
+
+    <section class="grid">
+      <article>
+        <header>
+          <div>
+            <p class="kicker">HINGBERT REVIEW INTEGRITY & TRANSLATION</p>
+            <h3>Observed review signals & suspicious comment analysis</h3>
+          </div>
+        </header>
+        <div id="findings" class="items empty">No reviews were available from the source metadata.</div>
+      </article>
+      <article>
+        <header>
+          <div>
+            <p class="kicker">ANALYSIS METHODOLOGY & CITATION LOG</p>
+            <h3>Evaluation Logic & Journal Citation</h3>
+          </div>
+        </header>
+        <div class="methodology-box" style="padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; margin-bottom: 12px;">
+          <h4 style="margin: 0 0 6px 0; color: #7ff0d1; font-size: 0.9rem;">🔍 How Trust Engine Analyzed This Listing</h4>
+          <ul style="margin: 0; padding-left: 16px; color: #9da5bb; font-size: 0.8rem; line-height: 1.5;">
+            <li><b>Metadata Audit:</b> Verified ASIN/SKU, Brand, Price & High-Res Product Image.</li>
+            <li><b>De-Spammed Rating:</b> Filtered synthetic bot phrases, duplicate reviews, and rating vs sentiment mismatches.</li>
+            <li><b>Price History:</b> Extracted real 2510-day historical bounds from PriceHistoryApp network.</li>
+            <li><b>Cross-Platform Matching:</b> Ran multi-modal title + image hash match across Flipkart, Amazon, Croma, Nykaa, Myntra.</li>
+            <li><b>Review Burst Z-Score:</b> Audited daily posting volume spikes against normal statistical velocity threshold (Z > 2.0).</li>
+          </ul>
+        </div>
+        <div class="citation-box">
+          <label>IEEE Citation Format:</label>
+          <textarea id="citationIEEE" readonly rows="2"></textarea>
+          <label style="margin-top:8px;">BibTeX Reference Format:</label>
+          <textarea id="citationBibTeX" readonly rows="3"></textarea>
+        </div>
+        <div id="notices" class="items" style="margin-top:14px;"></div>
+      </article>
+    </section>
+  </div>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
