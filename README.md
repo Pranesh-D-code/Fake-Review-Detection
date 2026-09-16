@@ -14,6 +14,23 @@ uvicorn app.main:app --reload
 
 Open `http://127.0.0.1:8000`, paste a public product URL, and run an analysis. The interface renders only values exposed by the fetched page. It never substitutes demo products, prices, reviews, or direct-product matches.
 
+## Optional Apify review provider
+
+Amazon often withholds individual review text from ordinary public requests. The
+app can therefore use an Apify Amazon-review Actor during the background
+enrichment stage. The initial product price remains fast; review collection and
+cross-store matching complete afterwards.
+
+1. Create an Apify account and create an API token in **Settings → Integrations**.
+2. Copy `.env.example` to `.env`.
+3. Put the token in `APIFY_API_TOKEN` and leave `REVIEW_PROVIDER=apify`.
+4. Restart the FastAPI server.
+
+Never commit `.env` or paste its token into the browser or source code. The
+default Actor is configurable through `APIFY_AMAZON_REVIEWS_ACTOR`. Test the
+Actor with an `amazon.in` URL in the Apify Console before relying on it: Amazon
+may expose only a small set of product-page review texts for a given listing.
+
 ## Design notes
 
 - `app/engines.py` contains the deterministic, explainable baseline. It is production-safe to run locally and exposes clear replacement points for HingBERT/mBERT, Bi-LSTM attention, CLIP, GNN, SHAP, and LIME providers.

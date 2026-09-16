@@ -1,113 +1,106 @@
-"""Unified TrustEngine Platform FastAPI application.
-
-Endpoints:
-- GET /: Serves index.html UI
-- POST /api/analyse: Accepts {"url": "..."} and returns complete multi-modal analysis JSON
-- GET /api/report/{id}: Generates printable analytical evidence report
-- GET /health: Status diagnostic check
-"""
+"""FastAPI application for live product analysis."""
 from __future__ import annotations
 
-import traceback, uuid
+import re
+import traceback
+import uuid
 from typing import Any
-from fastapi import FastAPI, HTTPException, Request
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from .engines import extract_product, record_price, candidate_links, generate_citations, is_valid_ecommerce_url
+from .engines import candidate_links, extract_product, generate_citations, is_valid_ecommerce_url, record_price
 from .nlp_engine import compute_trust_score
 
-app = FastAPI(title="Unified TrustEngine Platform", version="2.0.0")
-
+app = FastAPI(title="Unified TrustEngine Platform", version="2.1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
-
 REPORTS_CACHE: dict[str, dict[str, Any]] = {}
+
 
 class AnalyseRequest(BaseModel):
     url: str
+
+
+def _build_result(analysis_id: str, product: Any, notices: list[str], enrichment_status: str, record_observation: bool) -> dict[str, Any]:
+    findings, trust_score, burst_summary = compute_trust_score(product, product.reviews)
+    history_points, price_summary = record_price(product, record=record_observation)
+    candidates, lowest_verified = candidate_links(product)
+    citation_ieee, citation_bibtex = generate_citations(product, trust_score)
+    history = [{
+        "observed_at": point.observed_at.isoformat() if hasattr(point.observed_at, "isoformat") else str(point.observed_at),
+        "price": point.price, "offer_price": point.offer_price,
+    } for point in history_points]
+    return {
+        "analysis_id": analysis_id,
+        "enrichment_status": enrichment_status,
+        "source": {name: getattr(product, name) for name in (
+            "platform", "url", "title", "price", "currency", "brand", "sku", "image_url",
+            "rating", "review_count", "category", "extracted_fields",
+        )},
+        "score": trust_score.model_dump(),
+        "findings": [finding.model_dump() for finding in findings],
+        "price_history": history,
+        "price_summary": price_summary.model_dump() if price_summary else None,
+        "review_burst_summary": burst_summary.model_dump() if burst_summary else None,
+        "candidates": [candidate.model_dump() for candidate in candidates],
+        "lowest_verified_match": lowest_verified.model_dump() if lowest_verified else None,
+        "best_collected_match": candidates[0].model_dump() if candidates else None,
+        "candidate_diagnostics": (getattr(product, "_p_data", {}) or {}).get("competitor_collection", {}),
+        "citation_ieee": citation_ieee,
+        "citation_bibtex": citation_bibtex,
+        "notices": notices,
+    }
+
+
+def _enrich_analysis(analysis_id: str, url: str) -> None:
+    """Slow review pagination and cross-store search, run after the first response."""
+    try:
+        product, notices = extract_product(url, mode="extract")
+        notices.insert(0, "Full review and cross-store enrichment completed.")
+        REPORTS_CACHE[analysis_id] = _build_result(analysis_id, product, notices, "complete", record_observation=False)
+    except Exception as exc:
+        current = REPORTS_CACHE.get(analysis_id, {})
+        current["enrichment_status"] = "failed"
+        current.setdefault("notices", []).append(f"Background enrichment could not finish: {exc}")
+        REPORTS_CACHE[analysis_id] = current
+
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+
 @app.post("/api/analyse")
-async def analyse(req: AnalyseRequest):
-    url = req.url.strip()
+async def analyse(req: AnalyseRequest, background_tasks: BackgroundTasks):
+    url = re.sub(r"\s+", "", req.url).strip()
     if not url.startswith("http"):
         url = "https://" + url
-
     if not is_valid_ecommerce_url(url):
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "Invalid E-Commerce Link. Please paste a valid product listing URL from an e-commerce website (e.g., Amazon, Flipkart, Myntra, Nykaa, Meesho, etc.)."}
-        )
-
+        return JSONResponse(status_code=400, content={"detail": "Invalid e-commerce link. Paste a product URL from a supported marketplace."})
     try:
-        product, notices = extract_product(url)
-        findings, trust_score, burst_summary = compute_trust_score(product, product.reviews)
-        history_points, price_summary = record_price(product)
-        candidates, lowest_verified = candidate_links(product)
-        citation_ieee, citation_bibtex = generate_citations(product, trust_score)
-
         analysis_id = str(uuid.uuid4())
-        
-        # Serialize datetime objects to ISO strings safely for JSONResponse
-        serialized_price_history = []
-        for p in history_points:
-            dt_str = p.observed_at.isoformat() if hasattr(p.observed_at, "isoformat") else str(p.observed_at)
-            serialized_price_history.append({
-                "observed_at": dt_str,
-                "price": p.price,
-                "offer_price": p.offer_price
-            })
-
-        result_data = {
-            "analysis_id": analysis_id,
-            "source": {
-                "platform": product.platform,
-                "url": product.url,
-                "title": product.title,
-                "price": product.price,
-                "currency": product.currency,
-                "brand": product.brand,
-                "sku": product.sku,
-                "image_url": product.image_url,
-                "rating": product.rating,
-                "review_count": product.review_count,
-                "category": product.category,
-                "extracted_fields": product.extracted_fields
-            },
-            "score": {
-                "score": trust_score.score,
-                "verdict": trust_score.verdict,
-                "confidence": trust_score.confidence,
-                "components": trust_score.components,
-                "raw_rating": trust_score.raw_rating,
-                "adjusted_rating": trust_score.adjusted_rating,
-                "spam_filtered_count": trust_score.spam_filtered_count
-            },
-            "findings": [f.dict() for f in findings],
-            "price_history": serialized_price_history,
-            "price_summary": price_summary.dict(),
-            "review_burst_summary": burst_summary.dict() if burst_summary else None,
-            "candidates": [c.dict() for c in candidates],
-            "lowest_verified_match": lowest_verified.dict() if lowest_verified else None,
-            "citation_ieee": citation_ieee,
-            "citation_bibtex": citation_bibtex,
-            "notices": notices
-        }
-
-        REPORTS_CACHE[analysis_id] = result_data
-        return JSONResponse(result_data)
-    except Exception as e:
+        product, notices = extract_product(url, mode="source")
+        notices.insert(0, "Showing live product details now; review collection and cross-store matching continue in the background.")
+        result = _build_result(analysis_id, product, notices, "pending", record_observation=True)
+        REPORTS_CACHE[analysis_id] = result
+        background_tasks.add_task(_enrich_analysis, analysis_id, url)
+        return JSONResponse(result)
+    except Exception as exc:
         traceback.print_exc()
-        return JSONResponse(
-            status_code=400,
-            content={"detail": f"Analysis failed: {str(e)}"}
-        )
+        return JSONResponse(status_code=400, content={"detail": f"Analysis failed: {exc}"})
+
+
+@app.get("/api/analyse/{analysis_id}")
+async def analysis_status(analysis_id: str):
+    data = REPORTS_CACHE.get(analysis_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Analysis expired or not found")
+    return JSONResponse(data)
+
 
 @app.get("/api/report/{analysis_id}", response_class=HTMLResponse)
 async def view_report(request: Request, analysis_id: str):
@@ -116,6 +109,7 @@ async def view_report(request: Request, analysis_id: str):
         raise HTTPException(status_code=404, detail="Analytical report expired or not found")
     return templates.TemplateResponse("report.html", {"request": request, "report": data})
 
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "engine": "Unified TrustEngine Platform 2.0"}
+    return {"status": "ok", "engine": "Unified TrustEngine Platform 2.1"}

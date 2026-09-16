@@ -20,7 +20,7 @@
     <div>
       <p class="kicker">MULTI-MODAL COMMERCE INTELLIGENCE</p>
       <h1>Know what the page<br><em>actually</em> says.</h1>
-      <p class="sub">Live Puppeteer browser extraction, HingBERT NLP review analysis, local 6-month price history graphs, and text + image visual match routing.</p>
+      <p class="sub">Live product-page and review-listing extraction, review-text analysis, local price observations, and text + image match routing.</p>
     </div>
     <div class="rules">
       <b>Truth protocol</b>
@@ -71,7 +71,7 @@
         <small id="priceMeta">—</small>
       </div>
       <div>
-        <p>Lowest verified match</p>
+        <p id="lowestMatchLabel">Lowest verified match</p>
         <strong id="lowestPrice">None</strong>
         <small id="lowestPriceMeta">Direct product listings only</small>
       </div>
@@ -110,12 +110,12 @@
           <div><small>6M Lowest</small><strong id="pMin">₹0</strong></div>
           <div><small>6M Average</small><strong id="pAvg">₹0</strong></div>
           <div><small>6M Highest</small><strong id="pMax">₹0</strong></div>
-          <div><small>Effective w/ Offers</small><strong id="pOffer">₹0</strong></div>
+          <div><small>Observed offer price</small><strong id="pOffer">—</strong></div>
           <div><small>Price Trend</small><strong id="pTrend">Stable</strong></div>
         </div>
 
         <div id="offerCard" class="offer-card">
-          <p>💳 <strong>Effective price with bank offers:</strong> <span id="offerVal">₹0</span> <small>(Includes ₹500 Instant Card Discount)</small></p>
+          <p>💳 <strong>Observed store offer:</strong> <span id="offerVal">Not exposed by the listing</span></p>
         </div>
 
         <canvas id="priceChart"></canvas>
@@ -136,33 +136,11 @@
       </article>
     </section>
 
-    <!-- NEW SECTION: REVIEW VELOCITY BURST Z-SCORE ANALYTICS -->
-    <section class="grid" style="margin-top: 24px;">
-      <article class="wide">
-        <header>
-          <div>
-            <p class="kicker">REVIEW VELOCITY BURST Z-SCORE ANALYTICS</p>
-            <h3>Daily review volume distribution & velocity burst anomalies</h3>
-          </div>
-        </header>
-
-        <div id="burstMetricsBar" class="price-summary-bar">
-          <div><small>Peak Review Date</small><strong id="burstPeakDate">—</strong></div>
-          <div><small>Peak Daily Volume</small><strong id="burstPeakCount">0 reviews</strong></div>
-          <div><small>Max Burst Z-Score</small><strong id="burstMaxZ">0.00</strong></div>
-          <div><small>3-Month Volume (90D)</small><strong id="burstVol90">0</strong></div>
-          <div><small>1-Year Volume (365D)</small><strong id="burstVol365">0</strong></div>
-        </div>
-
-        <canvas id="reviewBurstChart" style="margin-top: 14px; max-height: 280px;"></canvas>
-      </article>
-    </section>
-
     <section class="grid">
       <article>
         <header>
           <div>
-            <p class="kicker">HINGBERT REVIEW INTEGRITY & TRANSLATION</p>
+            <p class="kicker">LIVE REVIEW INTEGRITY & TRANSLATION</p>
             <h3>Observed review signals & suspicious comment analysis</h3>
           </div>
         </header>
@@ -180,9 +158,8 @@
           <ul style="margin: 0; padding-left: 16px; color: #9da5bb; font-size: 0.8rem; line-height: 1.5;">
             <li><b>Metadata Audit:</b> Verified ASIN/SKU, Brand, Price & High-Res Product Image.</li>
             <li><b>De-Spammed Rating:</b> Filtered synthetic bot phrases, duplicate reviews, and rating vs sentiment mismatches.</li>
-            <li><b>Price History:</b> Extracted real 2510-day historical bounds from PriceHistoryApp network.</li>
+            <li><b>Price History:</b> Retains real observations collected for this listing over time.</li>
             <li><b>Cross-Platform Matching:</b> Ran multi-modal title + image hash match across Flipkart, Amazon, Croma, Nykaa, Myntra.</li>
-            <li><b>Review Burst Z-Score:</b> Audited daily posting volume spikes against normal statistical velocity threshold (Z > 2.0).</li>
           </ul>
         </div>
         <div class="citation-box">

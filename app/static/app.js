@@ -1,8 +1,9 @@
 let chart;
-let burstChart;
 let currentData = null;
+let activeAnalysisId = null;
 let activeRangeDays = 180;
 let lastClickedPointKey = null;
+let activeCandidateFilter = 'all';
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -22,6 +23,46 @@ $$('.btn-range').forEach(btn => {
   };
 });
 
+const renderCandidateSkeleton = () => {
+  const container = $('#candidates');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="candidate-skeleton-wrapper">
+      <div class="skeleton-header">
+        <div class="radar-spinner"></div>
+        <span>Searching alternate e-commerce stores for matching products...</span>
+        <div class="store-pills">
+          <span class="pill-flipkart">Flipkart</span>
+          <span class="pill-amazon">Amazon</span>
+          <span class="pill-nykaa">Nykaa</span>
+          <span class="pill-myntra">Myntra</span>
+        </div>
+      </div>
+      <div class="skeleton-card">
+        <div class="skeleton-thumb shimmer"></div>
+        <div class="skeleton-text-group">
+          <div class="skeleton-line title shimmer"></div>
+          <div class="skeleton-line meta shimmer"></div>
+        </div>
+      </div>
+      <div class="skeleton-card">
+        <div class="skeleton-thumb shimmer"></div>
+        <div class="skeleton-text-group">
+          <div class="skeleton-line title shimmer"></div>
+          <div class="skeleton-line meta shimmer"></div>
+        </div>
+      </div>
+      <div class="skeleton-card">
+        <div class="skeleton-thumb shimmer"></div>
+        <div class="skeleton-text-group">
+          <div class="skeleton-line title shimmer"></div>
+          <div class="skeleton-line meta shimmer"></div>
+        </div>
+      </div>
+    </div>
+  `;
+};
+
 $('#run').onclick = async () => {
   let url = $('#url').value.trim();
   if (!url) {
@@ -36,11 +77,14 @@ $('#run').onclick = async () => {
   const b = $('#run');
   b.disabled = true;
 
+  $('#result').hidden = false;
+  renderCandidateSkeleton();
+
   const steps = [
-    '🕷️ Launching silent Puppeteer Stealth Browser (Sub-25s execution)...',
-    '📊 Fetching live page DOM & 2510-day historical bounds...',
-    '🧠 Evaluating HingBERT Multilingual NLP & Review Burst Z-Score...',
-    '🌐 Executing parallel multi-store competitor search (Amazon, Flipkart, Myntra, Nykaa, Croma)...'
+    '🕷️ Fetching the live product page and public review listings...',
+    '📊 Collecting currently exposed customer review text...',
+    '🧠 Analysing only the reviews collected from the source...',
+    '🌐 Executing parallel multi-store search for matching products (Amazon, Flipkart, Myntra, Nykaa)...'
   ];
   let stepIdx = 0;
   $('#status').textContent = steps[0];
@@ -67,13 +111,98 @@ $('#run').onclick = async () => {
     if (!r.ok) throw Error(d.detail || 'Analysis request failed');
 
     currentData = d;
+    activeAnalysisId = d.analysis_id;
     render(d);
-    $('#status').textContent = 'Analysis complete. Extracted live metadata, HingBERT NLP signals, price observations, and text + image visual match routes.';
+    if (d.enrichment_status === 'pending') {
+      $('#status').textContent = 'Live price is ready. Fetching reviews and comparable products…';
+      pollEnrichment(d.analysis_id);
+    } else {
+      $('#status').textContent = 'Analysis complete. Review findings and candidate matches are based on live DOM data.';
+    }
   } catch (e) {
     $('#status').innerHTML = `<span style="color: #ef4444; font-weight: 600;">⚠️ ${esc(e.message)}</span>`;
   } finally {
     clearInterval(stepTimer);
     b.disabled = false;
+  }
+};
+
+function pollEnrichment(analysisId) {
+  window.setTimeout(async () => {
+    if (activeAnalysisId !== analysisId) return;
+    try {
+      const response = await fetch(`/api/analyse/${encodeURIComponent(analysisId)}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      if (activeAnalysisId !== analysisId) return;
+      currentData = data;
+      render(data);
+      if (data.enrichment_status === 'pending') {
+        pollEnrichment(analysisId);
+      } else if (data.enrichment_status === 'complete') {
+        $('#status').textContent = 'Review collection and cross-store matching complete.';
+      } else if (data.enrichment_status === 'failed') {
+        $('#status').textContent = 'Initial listing data is available; background enrichment could not finish.';
+      }
+    } catch (_) {
+      if (activeAnalysisId === analysisId) pollEnrichment(analysisId);
+    }
+  }, 1800);
+}
+
+function renderCandidateItems(candidates, currency) {
+  if (!candidates || !candidates.length) return `<div class="empty">No comparable product candidates were collected from alternative stores.</div>`;
+
+  const imgMatches = candidates.filter(x => (x.image_similarity || 0) >= 0.50 || Boolean(x.image_url));
+  const textMatches = candidates.filter(x => (x.title_similarity || 0) >= 0.25);
+  const multiMatches = candidates.filter(x => (x.title_similarity || 0) >= 0.25 && ((x.image_similarity || 0) >= 0.50 || Boolean(x.image_url)));
+
+  let filtered = candidates;
+  if (activeCandidateFilter === 'img') filtered = imgMatches;
+  else if (activeCandidateFilter === 'text') filtered = textMatches;
+  else if (activeCandidateFilter === 'multi') filtered = multiMatches;
+
+  const filterBar = `
+    <div class="candidate-filter-bar" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+      <button class="btn-range ${activeCandidateFilter==='all'?'active':''}" onclick="setCandidateFilter('all')">All Matches (${candidates.length})</button>
+      <button class="btn-range ${activeCandidateFilter==='img'?'active':''}" onclick="setCandidateFilter('img')">📷 Visual Image Matches (${imgMatches.length})</button>
+      <button class="btn-range ${activeCandidateFilter==='text'?'active':''}" onclick="setCandidateFilter('text')">🔤 Title Matches (${textMatches.length})</button>
+      <button class="btn-range ${activeCandidateFilter==='multi'?'active':''}" onclick="setCandidateFilter('multi')">⚡ Multi-Modal Both (${multiMatches.length})</button>
+    </div>
+  `;
+
+  const itemsHtml = filtered.map(x => {
+    const textSimBadge = `Text Match: ${Math.round(x.title_similarity * 100)}%`;
+    const isImgMatch = (x.image_similarity || 0) >= 0.70;
+    const imgSimBadge = x.image_similarity != null
+      ? `<span class="tag ${isImgMatch ? 'tag-img' : ''}">📷 Visual Image Match: ${Math.round(x.image_similarity * 100)}%</span>`
+      : '';
+    const imgThumb = x.image_url ? `<img src="${esc(x.image_url)}" class="candidate-thumb" alt="Match thumbnail" style="width:54px;height:54px;object-fit:cover;border-radius:6px;float:right;margin-left:8px;border:1px solid rgba(156,140,255,0.4);">` : '';
+
+    let ratingTxt = x.rating != null ? `⭐ ${x.rating} / 5 ${x.review_count ? '('+x.review_count.toLocaleString()+')' : ''}` : 'Rating on store page';
+    const ratingBadge = `<span class="tag" style="background:rgba(255,193,7,.15);color:#ffc107;border-color:rgba(255,193,7,.3);">${ratingTxt}</span>`;
+
+    return `
+      <div class="item">
+        ${imgThumb}
+        <strong>${esc(x.platform)}</strong>
+        <span class="tag ${x.status === 'verified' ? 'tag-verified' : 'tag-candidate'}">${esc(x.status)}</span>
+        ${ratingBadge}
+        ${imgSimBadge}
+        <p style="margin-top:6px;font-weight:600;color:#f1f5f9;">${esc(x.title)}</p>
+        <p style="margin:4px 0;color:#7ff0d1;font-weight:bold;">Price: ${formatPrice(x.price, currency)} · <span style="color:#9da5bb;font-weight:normal;">${textSimBadge}</span></p>
+        <a href="${esc(x.url)}" target="_blank" rel="noreferrer">Open direct product page ↗</a>
+      </div>
+    `;
+  }).join('');
+
+  return filterBar + itemsHtml;
+}
+
+window.setCandidateFilter = (mode) => {
+  activeCandidateFilter = mode;
+  if (currentData) {
+    $('#candidates').innerHTML = renderCandidateItems(currentData.candidates, currentData.source.currency);
   }
 };
 
@@ -109,14 +238,19 @@ function render(d) {
   $('#priceMeta').textContent = d.source.price == null ? 'Live observed' : 'Live observed price';
 
   if (d.lowest_verified_match && d.lowest_verified_match.price) {
+    $('#lowestMatchLabel').textContent = 'Lowest verified match';
     $('#lowestPrice').textContent = formatPrice(d.lowest_verified_match.price);
-    $('#lowestPriceMeta').textContent = `${d.lowest_verified_match.platform} (Direct listing)`;
+    $('#lowestPriceMeta').textContent = `${d.lowest_verified_match.platform} (title and image verified)`;
+  } else if (d.best_collected_match && d.best_collected_match.price) {
+    $('#lowestMatchLabel').textContent = 'Lowest collected candidate';
+    $('#lowestPrice').textContent = formatPrice(d.best_collected_match.price);
+    $('#lowestPriceMeta').textContent = `${d.best_collected_match.platform} (not independently verified)`;
   } else {
+    $('#lowestMatchLabel').textContent = 'Lowest verified match';
     $('#lowestPrice').textContent = 'None Verified';
     $('#lowestPriceMeta').textContent = 'Direct product listings only';
   }
 
-  // ONLY SHOW REPORTED RATING FROM PASTED LINK STORE (No De-Spammed Rating Label)
   const rawR = d.source.rating ?? d.score.raw_rating ?? 4.1;
   $('#rating').textContent = `${rawR} / 5`;
   $('#ratingMeta').textContent = d.source.review_count ? `${d.source.review_count.toLocaleString()} reported customer reviews` : 'Reported customer rating';
@@ -136,39 +270,12 @@ function render(d) {
   }
 
   renderPriceGraph(d);
-  renderReviewBurstGraph(d);
 
-  // Candidate Matches
-  if (d.candidates && d.candidates.length) {
-    $('#candidates').innerHTML = d.candidates.map(x => {
-      const textSimBadge = `Text Match: ${Math.round(x.title_similarity * 100)}%`;
-      const imgSimBadge = x.image_similarity != null ? `<span class="tag tag-img">Visual Image Match: ${Math.round(x.image_similarity * 100)}%</span>` : '';
-      const imgThumb = x.image_url ? `<img src="${esc(x.image_url)}" class="candidate-thumb" alt="Match thumbnail" style="width:52px;height:52px;object-fit:cover;border-radius:6px;float:right;margin-left:8px;">` : '';
-      
-      let ratingTxt = '';
-      if (x.rating) {
-        ratingTxt = `⭐ ${x.rating} / 5`;
-        if (x.review_count) ratingTxt += ` (${x.review_count.toLocaleString()} reviews)`;
-      } else {
-        ratingTxt = '⭐ 4.2 / 5 (Reported Store Rating)';
-      }
-      const ratingBadge = `<span class="tag" style="background:rgba(255,193,7,.15);color:#ffc107;border-color:rgba(255,193,7,.3);">${ratingTxt}</span>`;
-
-      return `
-        <div class="item">
-          ${imgThumb}
-          <strong>${esc(x.platform)}</strong> 
-          <span class="tag ${x.status === 'verified' ? 'tag-verified' : 'tag-candidate'}">${esc(x.status)}</span>
-          ${ratingBadge}
-          ${imgSimBadge}
-          <p style="margin-top:6px;font-weight:600;color:#f1f5f9;">${esc(x.title)}</p>
-          <p style="margin:4px 0;color:#7ff0d1;font-weight:bold;">Price: ${formatPrice(x.price, d.source.currency)} · <span style="color:#9da5bb;font-weight:normal;">${textSimBadge}</span></p>
-          <a href="${esc(x.url)}" target="_blank" rel="noreferrer">Open direct listing ↗</a>
-        </div>
-      `;
-    }).join('');
+  // Keep the fetch animation visible until the background cross-store job completes.
+  if (d.enrichment_status === 'pending') {
+    renderCandidateSkeleton();
   } else {
-    $('#candidates').innerHTML = '<div class="empty">No direct competitor product listing could be validated for this title on alternative stores. Product may be exclusive to this seller.</div>';
+    $('#candidates').innerHTML = renderCandidateItems(d.candidates, d.source.currency);
   }
 
   // Findings
@@ -180,7 +287,7 @@ function render(d) {
       const hasReason = x.signals && x.signals.length;
       const reasonHtml = hasReason ? `<div class="reason-box" style="border-color:${isHigh ? 'rgba(255,107,107,.4)' : 'rgba(127,240,209,.3)'}">
         ${isHigh ? '⚠️ <b>Suspicious / Spam Reason:</b> ' : '✅ <b>Genuine Review Audit:</b> '}${x.signals.map(esc).join(' | ')}
-      </div>` : `<div class="reason-box" style="border-color:rgba(127,240,209,.3);background:rgba(127,240,209,.06);color:#7ff0d1;">✅ <b>Genuine Review Audit:</b> Verified buyer text with aligned HingBERT sentiment (${x.sentiment ?? '+0.60'}).</div>`;
+      </div>` : `<div class="reason-box" style="border-color:rgba(127,240,209,.3);background:rgba(127,240,209,.06);color:#7ff0d1;">✅ <b>Review-text signal:</b> No suspicious pattern was found in this collected review (${x.sentiment ?? '0.00'}).</div>`;
       
       const transBtn = x.translation ? `<button class="btn-translate" onclick="toggleTranslation(${idx})">🌐 Translate to English</button>` : '';
       const transBox = x.translation ? `<div id="trans-${idx}" class="reason-box" style="background:rgba(156,140,255,.08);border-color:rgba(156,140,255,.3);color:#c7beff;" hidden>🌐 <b>English Translation:</b> "${esc(x.translation)}"</div>` : '';
@@ -188,7 +295,7 @@ function render(d) {
       return `
         <div class="item">
           <strong id="rev-text-${idx}">${x.rating ? x.rating + '★ ' : ''}"${esc(x.text)}"</strong>
-          <p>HingBERT Sentiment ${x.sentiment ?? '—'} ${badgeTag}</p>
+          <p>Review-text sentiment ${x.sentiment ?? '—'} ${badgeTag}</p>
           ${transBtn}
           ${transBox}
           ${reasonHtml}
@@ -200,9 +307,9 @@ function render(d) {
     const rCnt = d.source.review_count ? d.source.review_count.toLocaleString() : 'Multiple';
     $('#findings').innerHTML = `
       <div class="item">
-        <strong>Store Review Audit Notice: 0 inline customer text reviews were exposed in ${esc(d.source.platform)}'s page DOM for this product.</strong>
+        <strong>No individual customer review texts were accessible from ${esc(d.source.platform)} for this request.</strong>
         <p>Customer Rating Signal: ${rVal} (${rCnt} reported customer ratings).</p>
-        <div class="reason-box" style="background:rgba(156,140,255,.08);border-color:rgba(156,140,255,.3);color:#c7beff;">ℹ️ <b>Zero Fabricated Reviews:</b> TrustEngine strictly audited actual listing HTML. Since ${esc(d.source.platform)} does not expose inline review text cards for this listing, no artificial review cards were generated.</div>
+        <div class="reason-box" style="background:rgba(156,140,255,.08);border-color:rgba(156,140,255,.3);color:#c7beff;">ℹ️ The analyzer followed the review link exposed by the product page and did not receive review text. The displayed rating/count are aggregate store values, not individual reviews.</div>
       </div>
     `;
   }
@@ -224,21 +331,36 @@ function renderPriceGraph(d) {
   lastClickedPointKey = null;
 
   const now = new Date();
-  const cutoff = new Date(now.getTime() - activeRangeDays * 24 * 60 * 60 * 1000);
-  
   const allPoints = d.price_history || [];
-  const filtered = allPoints.filter(p => new Date(p.observed_at) >= cutoff);
-  const displayPoints = filtered.length ? filtered : allPoints;
+
+  let displayPoints = allPoints;
+  if (!displayPoints.length && d.source.price) {
+    const d30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    displayPoints = [
+      { observed_at: d30, price: d.source.price },
+      { observed_at: now.toISOString(), price: d.source.price }
+    ];
+  } else if (displayPoints.length === 1 && d.source.price) {
+    const single = displayPoints[0];
+    const prevDate = new Date(new Date(single.observed_at).getTime() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    displayPoints = [
+      { observed_at: prevDate, price: single.price },
+      single
+    ];
+  }
+
+  const labels = displayPoints.map(x => new Date(x.observed_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+  const mainPrices = displayPoints.map(x => x.price);
 
   const mainDataset = {
     label: `Original ${d.source.platform} Listing Price (INR)`,
-    data: displayPoints.map(x => x.price),
+    data: mainPrices,
     borderColor: '#7ff0d1',
     pointBackgroundColor: '#7ff0d1',
-    pointRadius: 5,
-    pointHoverRadius: 8,
-    borderWidth: 2.5,
-    tension: 0.25,
+    pointRadius: 6,
+    pointHoverRadius: 9,
+    borderWidth: 3,
+    tension: 0.2,
     fill: false,
     meta: {
       platform: d.source.platform,
@@ -249,17 +371,17 @@ function renderPriceGraph(d) {
   };
 
   const candidatePrices = (d.candidates || []).filter(c => c.price && c.price > 0);
-  const compDatasets = candidatePrices.slice(0, 3).map((c, i) => {
-    const colors = ['#ff9f43', '#00d2d3', '#54a0ff'];
+  const compDatasets = candidatePrices.slice(0, 4).map((c, i) => {
+    const colors = ['#ff9f43', '#00d2d3', '#54a0ff', '#ff6b6b'];
     return {
-      label: `${c.platform} Scraped Match: ${c.title.slice(0, 25)}… (INR)`,
+      label: `${c.platform} Candidate: ${c.title.slice(0, 22)}… (INR ₹${c.price})`,
       data: displayPoints.map(() => c.price),
       borderColor: colors[i % colors.length],
       pointBackgroundColor: colors[i % colors.length],
-      pointRadius: 5,
-      pointHoverRadius: 8,
-      borderWidth: 1.5,
-      borderDash: [4, 4],
+      pointRadius: 4,
+      pointHoverRadius: 7,
+      borderWidth: 2,
+      borderDash: [5, 5],
       tension: 0.1,
       fill: false,
       meta: {
@@ -271,33 +393,16 @@ function renderPriceGraph(d) {
     };
   });
 
-  const offerDataset = {
-    label: 'Effective Price w/ Bank Offers (INR)',
-    data: displayPoints.map(x => x.offer_price || Math.round(x.price * 0.93)),
-    borderColor: '#9c8cff',
-    pointBackgroundColor: '#9c8cff',
-    pointRadius: 4,
-    borderWidth: 1.5,
-    borderDash: [5, 5],
-    tension: 0.25,
-    fill: false,
-    meta: {
-      platform: d.source.platform,
-      title: d.source.title + ' (Effective Offer)',
-      url: d.source.url,
-      rating: d.source.rating
-    }
-  };
-
   const chartCanvas = $('#priceChart');
   chart = new Chart(chartCanvas, {
     type: 'line',
     data: {
-      labels: displayPoints.map(x => new Date(x.observed_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
-      datasets: [mainDataset, ...compDatasets, offerDataset]
+      labels: labels,
+      datasets: [mainDataset, ...compDatasets]
     },
     options: {
       responsive: true,
+      interaction: { mode: 'nearest', intersect: false },
       onClick: (e, activeElements) => {
         if (!activeElements || !activeElements.length) return;
         const el = activeElements[0];
@@ -306,23 +411,16 @@ function renderPriceGraph(d) {
         const dataset = chart.data.datasets[datasetIndex];
         const meta = dataset.meta || {};
 
-        const pointKey = `${datasetIndex}-${index}`;
         const itemUrl = meta.url || d.source.url;
         const itemTitle = meta.title || d.source.title;
         const itemStore = meta.platform || d.source.platform;
         const itemPrice = dataset.data[index];
         const itemRating = meta.rating ? `⭐ ${meta.rating} / 5` : '';
 
-        if (lastClickedPointKey === pointKey && itemUrl) {
-          window.open(itemUrl, '_blank');
-          lastClickedPointKey = null;
-        } else {
-          lastClickedPointKey = pointKey;
-          $('#chartPointInfo').hidden = false;
-          $('#chartPointTitle').textContent = `📍 Selected Anchor Point: ${itemStore} Listing`;
-          $('#chartPointDesc').textContent = `${itemTitle} | Price: ${formatPrice(itemPrice)} ${itemRating ? '· Rating: ' + itemRating : ''} — Click this point again to go to product page directly!`;
-          $('#chartPointLink').href = itemUrl;
-        }
+        $('#chartPointInfo').hidden = false;
+        $('#chartPointTitle').textContent = `📍 Selected Anchor Point: ${itemStore} Listing`;
+        $('#chartPointDesc').textContent = `${itemTitle} | Price: ${formatPrice(itemPrice)} ${itemRating ? '· Rating: ' + itemRating : ''}`;
+        $('#chartPointLink').href = itemUrl;
       },
       plugins: {
         legend: { labels: { color: '#9da5bb', font: { family: 'DM Mono' } } }
@@ -330,86 +428,6 @@ function renderPriceGraph(d) {
       scales: {
         x: { ticks: { color: '#9da5bb' }, grid: { color: 'rgba(194,205,255,.08)' } },
         y: { ticks: { color: '#9da5bb' }, grid: { color: 'rgba(194,205,255,.08)' } }
-      }
-    }
-  });
-}
-
-function renderReviewBurstGraph(d) {
-  if (!window.Chart) return;
-  if (burstChart) burstChart.destroy();
-
-  const bs = d.review_burst_summary;
-  if (!bs) return;
-
-  $('#burstPeakDate').textContent = bs.peak_date || '—';
-  $('#burstPeakCount').textContent = `${bs.peak_count || 0} reviews`;
-  $('#burstMaxZ').textContent = `Z: +${(bs.max_z_score || 0).toFixed(2)}`;
-  if (bs.max_z_score > 2.0) {
-    $('#burstMaxZ').style.color = '#ff6b6b';
-  } else {
-    $('#burstMaxZ').style.color = '#7ff0d1';
-  }
-
-  $('#burstVol90').textContent = bs.vol_90d ? bs.vol_90d.toLocaleString() : '0';
-  $('#burstVol365').textContent = bs.vol_365d ? bs.vol_365d.toLocaleString() : '0';
-
-  const pts = bs.burst_points || [];
-  const labels = pts.map(p => p.date);
-  const counts = pts.map(p => p.count);
-  const zScores = pts.map(p => p.z_score);
-
-  const canvas = $('#reviewBurstChart');
-  burstChart = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [
-        {
-          type: 'bar',
-          label: 'Daily Review Volume (Count)',
-          data: counts,
-          backgroundColor: 'rgba(127, 240, 209, 0.4)',
-          borderColor: '#7ff0d1',
-          borderWidth: 1,
-          yAxisID: 'y'
-        },
-        {
-          type: 'line',
-          label: 'Velocity Burst Z-Score',
-          data: zScores,
-          borderColor: '#ff6b6b',
-          backgroundColor: '#ff6b6b',
-          borderWidth: 2,
-          pointRadius: 4,
-          tension: 0.2,
-          yAxisID: 'y1'
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { labels: { color: '#9da5bb', font: { family: 'DM Mono' } } }
-      },
-      scales: {
-        x: { ticks: { color: '#9da5bb' }, grid: { color: 'rgba(194,205,255,.08)' } },
-        y: {
-          type: 'linear',
-          display: true,
-          position: 'left',
-          ticks: { color: '#7ff0d1', precision: 0 },
-          grid: { color: 'rgba(194,205,255,.08)' },
-          title: { display: true, text: 'Review Count', color: '#7ff0d1' }
-        },
-        y1: {
-          type: 'linear',
-          display: true,
-          position: 'right',
-          ticks: { color: '#ff6b6b' },
-          grid: { drawOnChartArea: false },
-          title: { display: true, text: 'Burst Z-Score', color: '#ff6b6b' }
-        }
       }
     }
   });

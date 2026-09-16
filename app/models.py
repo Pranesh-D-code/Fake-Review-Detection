@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 class AnalyseRequest(BaseModel):
@@ -44,6 +44,8 @@ class Candidate(BaseModel):
     price: float | None = None
     rating: float | None = None
     review_count: int | None = None
+    review_sample_count: int = 0
+    review_sample: list[dict[str, Any]] = []
     title_similarity: float
     image_similarity: float | None = None
     image_url: str | None = None
