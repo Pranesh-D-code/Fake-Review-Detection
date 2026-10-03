@@ -1,10 +1,12 @@
-"""HingBERT Multilingual NLP & ML Review Classification Engine.
+"""Evidence-based NLP baseline for collected product reviews.
 
 Pillars of Assessment:
 1. Listing Metadata Audit: Validates SKU/ASIN, brand consistency, price presence, high-res image availability.
 2. Customer Rating Reputation Audit: De-spams ratings by filtering bot/synthetic sentiment spikes from REAL scraped reviews.
 3. Market Price Realism & Historical Bounds: Compares observed price against recorded DB history.
-4. HingBERT Multilingual NLP & ML Review Classifier: Evaluates real scraped reviews using sentiment alignment, duplicate text ratio, synthetic bot phrasing patterns, and review volume velocity burst Z-scores.
+4. Review-text integrity baseline: evaluates real scraped reviews using sentiment
+   alignment, duplicate text, low-information promotional phrasing, and clear
+   evidence labels. It deliberately does not claim to prove authorship by AI.
 """
 from __future__ import annotations
 
@@ -29,8 +31,13 @@ HINGLISH_TRANSLATIONS = {
     "bakwas product, ekdum duplicate saaman hai, kisi kaam ka nahi hai.": "Useless product, completely fake/duplicate item, of no use at all."
 }
 
-class MLReviewClassifier:
-    """ML & NLP Classifier for evaluating real customer reviews for fake/spam indicators."""
+class ReviewIntegrityClassifier:
+    """Explainable baseline, not a trained AI-authorship detector.
+
+    A review can be marked suspicious only for observed text signals. A review
+    without such signals is "genuine-looking", not proven genuine. Ambiguous or
+    low-information text stays in "needs-review".
+    """
 
     @staticmethod
     def analyze_sentiment(text: str) -> float:
@@ -46,19 +53,19 @@ class MLReviewClassifier:
         return round((pos_count - neg_count) / max(1, pos_count + neg_count), 2)
 
     @classmethod
-    def predict(cls, review: Review) -> tuple[float, str | None, list[str], str, float | None]:
+    def predict(cls, review: Review, near_duplicate: bool = False) -> tuple[float, str | None, list[str], str, float | None, str, float]:
         text = review.text.strip()
         t_lower = text.lower()
         rating = review.rating
 
         signals = []
-        is_suspicious = False
+        suspicion_score = 0.0
         mismatch_val = 0.0
 
         for pat in SYNTHETIC_PATTERNS:
             if re.search(pat, t_lower):
                 signals.append("Repetitive promotional bot phrasing pattern detected")
-                is_suspicious = True
+                suspicion_score += 0.60
                 break
 
         sentiment = cls.analyze_sentiment(text)
@@ -66,17 +73,35 @@ class MLReviewClassifier:
         if rating is not None:
             if rating >= 4 and sentiment <= -0.4:
                 signals.append(f"{rating}-Star rating given to negative body text (Rating-Sentiment Mismatch)")
-                is_suspicious = True
+                suspicion_score += 0.50
                 mismatch_val = 1.0
             elif rating <= 2 and sentiment >= 0.5:
                 signals.append(f"{rating}-Star rating given to positive body text (Rating Inflation/Deflation)")
-                is_suspicious = True
+                suspicion_score += 0.45
                 mismatch_val = 0.8
 
         if len(text.split()) <= 4 and rating == 5 and sentiment > 0.5:
             signals.append("Short low-information 5-star praise review")
+            suspicion_score += 0.20
 
-        risk = "high" if is_suspicious else "medium" if signals else "low"
+        if near_duplicate:
+            signals.append("Near-duplicate wording found in another collected review")
+            suspicion_score += 0.55
+
+        if suspicion_score >= 0.50:
+            classification = "suspicious"
+            confidence = min(0.92, round(0.50 + suspicion_score * 0.35, 2))
+            risk = "high" if suspicion_score >= 0.8 else "medium"
+        elif len(text.split()) >= 8 and not signals:
+            classification = "genuine-looking"
+            confidence = 0.58
+            risk = "low"
+            signals.append("No promotional, duplicate, or rating-sentiment mismatch signal found")
+        else:
+            classification = "needs-review"
+            confidence = 0.35
+            risk = "medium"
+            signals.append("Too little evidence to classify this review reliably")
 
         translation = HINGLISH_TRANSLATIONS.get(t_lower)
         if not translation:
@@ -85,7 +110,24 @@ class MLReviewClassifier:
                     translation = trans
                     break
 
-        return sentiment, translation, signals, risk, mismatch_val
+        return sentiment, translation, signals, risk, mismatch_val, classification, confidence
+
+
+def _near_duplicate_indices(reviews: list[Review]) -> set[int]:
+    """Identify similar text inside only the reviews returned for this run."""
+    duplicates: set[int] = set()
+    normalised = [re.sub(r"\W+", " ", review.text.casefold()).strip() for review in reviews]
+    for index, text in enumerate(normalised):
+        if len(text.split()) < 4:
+            continue
+        for earlier in range(index):
+            other = normalised[earlier]
+            if len(other.split()) < 4:
+                continue
+            if text == other or SequenceMatcher(None, text, other).ratio() >= 0.92:
+                duplicates.update((earlier, index))
+                break
+    return duplicates
 
 def compute_trust_score(product: Product, reviews: list[Review] | None = None) -> tuple[list[Finding], TrustScore, ReviewBurstSummary | None]:
     audited_reviews = reviews if (reviews is not None and len(reviews) > 0) else product.reviews
@@ -95,11 +137,14 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
     sentiments = []
 
     if audited_reviews:
-        for r in audited_reviews:
-            sent, trans, sigs, risk, mismatch_val = MLReviewClassifier.predict(r)
+        duplicate_indices = _near_duplicate_indices(audited_reviews)
+        for index, r in enumerate(audited_reviews):
+            sent, trans, sigs, risk, mismatch_val, classification, classification_confidence = ReviewIntegrityClassifier.predict(
+                r, near_duplicate=index in duplicate_indices
+            )
             sentiments.append(sent)
 
-            if risk == "high" or (sigs and len(sigs) > 0):
+            if classification == "suspicious":
                 spam_count += 1
             # Every collected review is shown. Genuine reviews must not disappear
             # simply because they have no suspicious signal.
@@ -110,7 +155,9 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
                 translation=trans,
                 signals=sigs,
                 risk=risk,
-                mismatch=mismatch_val
+                mismatch=mismatch_val,
+                classification=classification,
+                classification_confidence=classification_confidence,
             ))
 
     has_title = bool(product.title and product.title.strip())

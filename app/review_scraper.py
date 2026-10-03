@@ -78,6 +78,44 @@ def _first_text(record: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
+def _number(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        match = re.search(r"([\d,]+(?:\.\d+)?)", value)
+        if match:
+            return float(match.group(1).replace(",", ""))
+    return None
+
+
+def _integer(value: Any) -> int | None:
+    parsed = _number(value)
+    return int(parsed) if parsed is not None else None
+
+
+def _run_apify_actor(actor: str, actor_input: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    token = os.getenv("APIFY_API_TOKEN", "").strip()
+    if not token:
+        return [], "Apify is not configured (add APIFY_API_TOKEN to .env)."
+    if not actor:
+        return [], "Apify Actor is not configured."
+
+    actor_id = actor.replace("/", "~", 1)
+    endpoint = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
+    try:
+        with httpx.Client(timeout=80.0) as client:
+            response = client.post(endpoint, params={"token": token}, json=actor_input)
+            response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, list):
+            return [record for record in payload if isinstance(record, dict)], ""
+        return [], "Apify returned an unexpected response."
+    except httpx.HTTPStatusError as exc:
+        return [], f"Apify request failed ({exc.response.status_code}). Check the token, Actor, and available credits."
+    except (httpx.HTTPError, ValueError) as exc:
+        return [], f"Apify request could not complete ({type(exc).__name__})."
+
+
 def _normalise_apify_reviews(payload: Any, limit: int) -> list[dict[str, Any]]:
     """Map Actor output variants into the app's provider-neutral review shape."""
     records = payload if isinstance(payload, list) else []
@@ -113,34 +151,59 @@ def collect_apify_amazon_reviews(product_url: str, limit: int = 20) -> tuple[lis
     and never uploads a shopper's Amazon cookies or account credentials.
     """
     limit = _configured_limit(limit)
-    token = os.getenv("APIFY_API_TOKEN", "").strip()
-    if not token:
-        return [], "Apify is not configured (add APIFY_API_TOKEN to .env)."
-
     actor = os.getenv("APIFY_AMAZON_REVIEWS_ACTOR", APIFY_DEFAULT_ACTOR).strip()
-    if not actor:
-        return [], "Apify review Actor is not configured."
-
-    actor_id = actor.replace("/", "~", 1)
-    endpoint = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
     actor_input = {
         "scrapeType": "reviews",
         "reviewProductUrls": [product_url],
         "marketplace": _marketplace(product_url),
         "maxItemsPerInput": limit,
     }
-    try:
-        with httpx.Client(timeout=80.0) as client:
-            response = client.post(endpoint, params={"token": token}, json=actor_input)
-            response.raise_for_status()
-        reviews = _normalise_apify_reviews(response.json(), limit)
-        if reviews:
-            return reviews, f"Apify Actor {actor}"
-        return [], f"Apify Actor {actor} returned no accessible individual review text."
-    except httpx.HTTPStatusError as exc:
-        return [], f"Apify review request failed ({exc.response.status_code}). Check the token, Actor, and available credits."
-    except (httpx.HTTPError, ValueError) as exc:
-        return [], f"Apify review request could not complete ({type(exc).__name__})."
+    records, error = _run_apify_actor(actor, actor_input)
+    if error:
+        return [], f"Apify review request: {error}"
+    reviews = _normalise_apify_reviews(records, limit)
+    if reviews:
+        return reviews, f"Apify Actor {actor}"
+    return [], f"Apify Actor {actor} returned no accessible individual review text."
+
+
+def collect_apify_amazon_product(product_url: str) -> tuple[dict[str, Any], str]:
+    """Collect structured Amazon product metadata from the same configured Actor.
+
+    Only values actually returned by Apify are exposed.  The caller decides how
+    to merge these values with page-derived fields, preserving a transparent
+    fallback when the provider has no record for a listing.
+    """
+    if os.getenv("REVIEW_PROVIDER", "public").strip().casefold() != "apify":
+        return {}, "Apify product provider is disabled."
+
+    actor = os.getenv("APIFY_AMAZON_PRODUCT_ACTOR", APIFY_DEFAULT_ACTOR).strip()
+    records, error = _run_apify_actor(actor, {
+        "scrapeType": "product",
+        "productUrls": [product_url],
+        "marketplace": _marketplace(product_url),
+        "maxItemsPerInput": 1,
+    })
+    if error:
+        return {}, f"Apify product request: {error}"
+    if not records:
+        return {}, f"Apify Actor {actor} returned no product record."
+
+    record = records[0]
+    price = _number(record.get("price") or record.get("priceText") or record.get("currentPrice"))
+    rating = _number(record.get("rating") or record.get("ratingStars") or record.get("stars"))
+    mapped = {
+        "title": _first_text(record, "title", "productTitle", "name"),
+        "brand": _first_text(record, "brand", "brandName"),
+        "sku": _first_text(record, "asin", "ASIN", "sku", "productId"),
+        "price": price,
+        "currency": _first_text(record, "currency", "priceCurrency") or ("INR" if ".in" in product_url else None),
+        "image_url": _first_text(record, "imageUrl", "image_url", "mainImage", "image", "thumbnail"),
+        "rating": rating,
+        "review_count": _integer(record.get("reviewCount") or record.get("reviewsCount") or record.get("totalReviews") or record.get("ratingsCount")),
+        "availability": _first_text(record, "availability", "availabilityText", "stockStatus"),
+    }
+    return {key: value for key, value in mapped.items() if value is not None}, f"Apify Actor {actor}"
 
 
 def collect_amazon_reviews(product_url: str, asin: str, limit: int = 20) -> tuple[list[dict[str, Any]], str]:

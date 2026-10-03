@@ -59,6 +59,8 @@ class Finding(BaseModel):
     sentiment: float | None = None
     mismatch: float | None = None
     risk: Literal["low", "medium", "high"] = "low"
+    classification: Literal["genuine-looking", "suspicious", "needs-review"] = "needs-review"
+    classification_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     signals: list[str] = []
 
 class TrustScore(BaseModel):

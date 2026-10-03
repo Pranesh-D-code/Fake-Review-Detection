@@ -1,0 +1,13 @@
+{
+  "name": "trustengine-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Evidence-first ecommerce product and review analysis",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "puppeteer": "25.3.0",
+    "puppeteer-extra": "3.3.6"
+  }
+}

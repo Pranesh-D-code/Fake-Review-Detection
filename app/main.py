@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from .engines import candidate_links, extract_product, generate_citations, is_valid_ecommerce_url, record_price
+from .engines import candidate_links, extract_product, generate_citations, is_valid_ecommerce_url, record_price, record_review_observations
 from .nlp_engine import compute_trust_score
 
 app = FastAPI(title="Unified TrustEngine Platform", version="2.1.0")
@@ -27,6 +27,11 @@ class AnalyseRequest(BaseModel):
 
 def _build_result(analysis_id: str, product: Any, notices: list[str], enrichment_status: str, record_observation: bool) -> dict[str, Any]:
     findings, trust_score, burst_summary = compute_trust_score(product, product.reviews)
+    stored_review_count = record_review_observations(product, findings)
+    if stored_review_count:
+        notices.append(
+            f"Saved {stored_review_count} source-collected review observation(s) for later human labelling and model evaluation."
+        )
     history_points, price_summary = record_price(product, record=record_observation)
     candidates, lowest_verified = candidate_links(product)
     citation_ieee, citation_bibtex = generate_citations(product, trust_score)
@@ -43,6 +48,7 @@ def _build_result(analysis_id: str, product: Any, notices: list[str], enrichment
         )},
         "score": trust_score.model_dump(),
         "findings": [finding.model_dump() for finding in findings],
+        "stored_review_count": stored_review_count,
         "price_history": history,
         "price_summary": price_summary.model_dump() if price_summary else None,
         "review_burst_summary": burst_summary.model_dump() if burst_summary else None,

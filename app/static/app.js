@@ -281,13 +281,18 @@ function render(d) {
   // Findings
   if (d.findings && d.findings.length) {
     $('#findings').innerHTML = d.findings.map((x, idx) => {
-      const isHigh = x.risk === 'high';
-      const badgeTag = isHigh ? '<span class="tag tag-high">⚠️ SUSPICIOUS / SPAM</span>' : '<span class="tag tag-verified">✅ AUTHENTIC / GENUINE</span>';
+      const suspicious = x.classification === 'suspicious';
+      const genuineLooking = x.classification === 'genuine-looking';
+      const badgeTag = suspicious
+        ? '<span class="tag tag-high">⚠️ SUSPICIOUS SIGNALS</span>'
+        : genuineLooking
+          ? '<span class="tag tag-verified">✓ GENUINE-LOOKING</span>'
+          : '<span class="tag">REQUIRES REVIEW</span>';
       
       const hasReason = x.signals && x.signals.length;
-      const reasonHtml = hasReason ? `<div class="reason-box" style="border-color:${isHigh ? 'rgba(255,107,107,.4)' : 'rgba(127,240,209,.3)'}">
-        ${isHigh ? '⚠️ <b>Suspicious / Spam Reason:</b> ' : '✅ <b>Genuine Review Audit:</b> '}${x.signals.map(esc).join(' | ')}
-      </div>` : `<div class="reason-box" style="border-color:rgba(127,240,209,.3);background:rgba(127,240,209,.06);color:#7ff0d1;">✅ <b>Review-text signal:</b> No suspicious pattern was found in this collected review (${x.sentiment ?? '0.00'}).</div>`;
+      const reasonHtml = hasReason ? `<div class="reason-box" style="border-color:${suspicious ? 'rgba(255,107,107,.4)' : 'rgba(127,240,209,.3)'}">
+        ${suspicious ? '⚠️ <b>Observed suspicious signals:</b> ' : 'ℹ️ <b>Review-text evidence:</b> '}${x.signals.map(esc).join(' | ')}
+      </div>` : '';
       
       const transBtn = x.translation ? `<button class="btn-translate" onclick="toggleTranslation(${idx})">🌐 Translate to English</button>` : '';
       const transBox = x.translation ? `<div id="trans-${idx}" class="reason-box" style="background:rgba(156,140,255,.08);border-color:rgba(156,140,255,.3);color:#c7beff;" hidden>🌐 <b>English Translation:</b> "${esc(x.translation)}"</div>` : '';
@@ -295,7 +300,7 @@ function render(d) {
       return `
         <div class="item">
           <strong id="rev-text-${idx}">${x.rating ? x.rating + '★ ' : ''}"${esc(x.text)}"</strong>
-          <p>Review-text sentiment ${x.sentiment ?? '—'} ${badgeTag}</p>
+          <p>Review-text sentiment ${x.sentiment ?? '—'} ${badgeTag} · ${Math.round((x.classification_confidence || 0) * 100)}% evidence confidence</p>
           ${transBtn}
           ${transBox}
           ${reasonHtml}

@@ -3,12 +3,12 @@
 Integration Architecture:
 1. Node.js Puppeteer Stealth Scraper (Primary Engine): Runs scraper.js silently via subprocess (with CREATE_NO_WINDOW and wShowWindow=0 on Windows) to extract metadata, real reviews, real price history metrics, competitor listings, and live competitor prices.
 2. Multi-Modal Image & Text Matching Engine (app.image_matcher): Computes perceptual image similarity and title similarity for candidate listings.
-3. HingBERT & Multi-Modal NLP Engine (app.nlp_engine): Performs 4-pillar trust scoring, sentiment alignment, mismatch detection, duplicate review detection, and ML review classification.
+3. Review Integrity Engine (app.nlp_engine): Performs an explainable NLP baseline for sentiment alignment, duplicate review detection, and suspicious-signal classification.
 4. Real Price Tracker Integration & Honest Empirical Price History.
 """
 from __future__ import annotations
 
-import json, math, re, sqlite3, statistics, subprocess, sys
+import hashlib, json, math, os, re, sqlite3, statistics, subprocess, sys
 from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -17,7 +17,7 @@ from urllib.parse import urlparse, quote_plus
 from .models import Candidate, Finding, PricePoint, PriceSummary, Product, Review, TrustScore, ReviewBurstSummary
 from .nlp_engine import compute_trust_score
 from .image_matcher import compute_image_similarity
-from .review_scraper import collect_amazon_reviews
+from .review_scraper import collect_amazon_reviews, collect_apify_amazon_product
 
 DATA_PATH = Path("trustengine.db")
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -110,24 +110,49 @@ def extract_product(url: str, mode: str = "extract") -> tuple[Product, list[str]
         raise ValueError("Invalid E-Commerce Link. Please paste a valid product listing URL from an e-commerce website (e.g., Amazon, Flipkart, Myntra, Nykaa, Meesho, etc.).")
 
     p_data = run_puppeteer_scraper(url, mode)
-    if p_data and isinstance(p_data, dict) and not p_data.get("error"):
-        platform = p_data.get("platform") or platform_for(url)
+    p_data = p_data if isinstance(p_data, dict) and not p_data.get("error") else {}
+    platform = p_data.get("platform") or platform_for(url)
+
+    # During the complete background pass, request the managed source for both
+    # product attributes and reviews.  Requests run in parallel to avoid adding
+    # an extra full round-trip to the user-visible wait.
+    provider_product: dict = {}
+    provider_product_notice = ""
+    provider_reviews: list[dict] = []
+    provider_reviews_notice = ""
+    if mode != "source" and platform == "Amazon":
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            product_future = executor.submit(collect_apify_amazon_product, url)
+            review_future = executor.submit(collect_amazon_reviews, url, p_data.get("sku") or "")
+            provider_product, provider_product_notice = product_future.result()
+            provider_reviews, provider_reviews_notice = review_future.result()
+
+        # Provider fields win only when they are real values.  This lets the
+        # app render metadata even if Amazon blocks the local page request.
+        for key, value in provider_product.items():
+            if value is not None:
+                p_data[key] = value
+        if provider_product:
+            p_data.setdefault("product_collection", {})["source"] = provider_product_notice
+        elif provider_product_notice:
+            p_data.setdefault("product_collection", {}).setdefault("issues", []).append(provider_product_notice)
+
+    if p_data:
+        platform = p_data.get("platform") or platform
         sku = p_data.get("sku")
-        raw_reviews = p_data.get("reviews", [])
+        raw_reviews = provider_reviews or p_data.get("reviews", [])
         # A configured review API is deliberately preferred during full
         # enrichment.  The initial source pass stays fast and is shown first.
-        use_review_provider = mode != "source" and platform == "Amazon" and sku
-        if use_review_provider:
-            fallback_reviews, fallback_source = collect_amazon_reviews(url, sku)
-            if fallback_reviews:
-                raw_reviews = fallback_reviews
-                p_data["reviews"] = fallback_reviews
-                p_data.setdefault("review_collection", {})["fallback_source"] = fallback_source
-            else:
-                collection = p_data.setdefault("review_collection", {})
-                collection.setdefault("issues", []).append(fallback_source)
-                if raw_reviews:
-                    collection.setdefault("source", "the product page")
+        use_review_provider = mode != "source" and platform == "Amazon"
+        if use_review_provider and provider_reviews:
+            p_data["reviews"] = provider_reviews
+            p_data.setdefault("review_collection", {})["fallback_source"] = provider_reviews_notice
+        elif use_review_provider:
+            collection = p_data.setdefault("review_collection", {})
+            collection.setdefault("issues", []).append(provider_reviews_notice)
+            if raw_reviews:
+                collection.setdefault("source", "the product page")
 
         reviews = []
         for r in raw_reviews:
@@ -166,6 +191,11 @@ def extract_product(url: str, mode: str = "extract") -> tuple[Product, list[str]
         }.items() if val is not None]
 
         collection = p_data.get("review_collection") or {}
+        product_collection = p_data.get("product_collection") or {}
+        if product_collection.get("source"):
+            notices.append(f"Product details refreshed from {product_collection['source']}; only returned values were used.")
+        for issue in product_collection.get("issues", [])[:1]:
+            notices.append(issue)
         if reviews:
             source_name = collection.get("fallback_source") or collection.get("source", "the listing")
             notices.append(f"Collected {len(reviews)} live review texts from {source_name}; no generated reviews were used.")
@@ -295,7 +325,121 @@ def candidate_links(product: Product) -> tuple[list[Candidate], Candidate | None
 def _db() -> sqlite3.Connection:
     db = sqlite3.connect(DATA_PATH)
     db.execute("CREATE TABLE IF NOT EXISTS observations (url TEXT, observed_at TEXT, price REAL)")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS review_observations (
+            product_url TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            sku TEXT,
+            review_hash TEXT NOT NULL,
+            review_text TEXT NOT NULL,
+            rating INTEGER,
+            review_timestamp TEXT,
+            verified_purchase INTEGER NOT NULL DEFAULT 0,
+            collection_source TEXT,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            baseline_label TEXT NOT NULL,
+            baseline_confidence REAL NOT NULL,
+            baseline_signals TEXT NOT NULL,
+            external_dataset TEXT,
+            external_label TEXT,
+            PRIMARY KEY (product_url, review_hash)
+        )
+    """)
+    # Human labels remain independent from automated output.  This is the
+    # dataset that can later be used to train and evaluate a BERT model.
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS review_labels (
+            review_hash TEXT PRIMARY KEY,
+            human_label TEXT NOT NULL,
+            annotator TEXT,
+            note TEXT,
+            labeled_at TEXT NOT NULL
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS dataset_label_mappings (
+            dataset_name TEXT NOT NULL,
+            raw_label TEXT NOT NULL,
+            normalized_label TEXT NOT NULL,
+            label_description TEXT NOT NULL,
+            documentation_url TEXT,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY (dataset_name, raw_label)
+        )
+    """)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(review_observations)")}
+    for name, definition in (
+        ("external_dataset", "TEXT"),
+        ("external_label", "TEXT"),
+    ):
+        if name not in columns:
+            db.execute(f"ALTER TABLE review_observations ADD COLUMN {name} {definition}")
     return db
+
+
+def _review_hash(text: str) -> str:
+    normalised = re.sub(r"\s+", " ", text.casefold()).strip()
+    return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+
+
+def record_review_observations(product: Product, findings: list[Finding]) -> int:
+    """Persist only reviews actually returned by a source for later labelling.
+
+    The saved `baseline_label` is an automated, explainable signal—not ground
+    truth.  Human labels are intentionally stored in the separate
+    `review_labels` table before any ML training takes place.
+    """
+    if os.getenv("STORE_REVIEW_OBSERVATIONS", "true").strip().casefold() in {"0", "false", "no"}:
+        return 0
+    if not product.reviews or len(product.reviews) != len(findings):
+        return 0
+
+    collection = (getattr(product, "_p_data", {}) or {}).get("review_collection", {})
+    source = collection.get("fallback_source") or collection.get("source") or "product page"
+    now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for review, finding in zip(product.reviews, findings):
+        rows.append((
+            product.url,
+            product.platform,
+            product.sku,
+            _review_hash(review.text),
+            review.text,
+            review.rating,
+            review.timestamp.isoformat() if review.timestamp else None,
+            int(review.verified_purchase),
+            source,
+            now,
+            now,
+            finding.classification,
+            finding.classification_confidence,
+            json.dumps(finding.signals, ensure_ascii=False),
+        ))
+
+    db = _db()
+    try:
+        db.executemany("""
+            INSERT INTO review_observations (
+                product_url, platform, sku, review_hash, review_text, rating,
+                review_timestamp, verified_purchase, collection_source,
+                first_seen_at, last_seen_at, baseline_label,
+                baseline_confidence, baseline_signals
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(product_url, review_hash) DO UPDATE SET
+                last_seen_at=excluded.last_seen_at,
+                rating=excluded.rating,
+                review_timestamp=excluded.review_timestamp,
+                verified_purchase=excluded.verified_purchase,
+                collection_source=excluded.collection_source,
+                baseline_label=excluded.baseline_label,
+                baseline_confidence=excluded.baseline_confidence,
+                baseline_signals=excluded.baseline_signals
+        """, rows)
+        db.commit()
+        return len(rows)
+    finally:
+        db.close()
 
 def record_price(product: Product, record: bool = True) -> tuple[list[PricePoint], PriceSummary | None]:
     if not product.price or product.price <= 0:

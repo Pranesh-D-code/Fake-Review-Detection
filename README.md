@@ -4,11 +4,24 @@ A live, evidence-first FastAPI application for analysing product-page metadata, 
 
 ## Run
 
+Prerequisites: Python 3.11+ and Node.js 20+.
+
 ```powershell
-cd outputs/TrustEnginePlatform
+git clone https://github.com/YOUR-ACCOUNT/TrustEnginePlatform.git
+cd TrustEnginePlatform
+
+# Install the Node.js scraper and its bundled browser.
+npm install
+
+# Create an isolated Python environment and install the API.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+
+# Optional but required for Apify-provided Amazon review text.
+Copy-Item .env.example .env
+# Edit .env locally and add APIFY_API_TOKEN. Never commit this file.
+
 uvicorn app.main:app --reload
 ```
 
@@ -30,6 +43,28 @@ Never commit `.env` or paste its token into the browser or source code. The
 default Actor is configurable through `APIFY_AMAZON_REVIEWS_ACTOR`. Test the
 Actor with an `amazon.in` URL in the Apify Console before relying on it: Amazon
 may expose only a small set of product-page review texts for a given listing.
+
+Without `.env`, the app still runs and uses public-page collection only; review
+text may be unavailable when a marketplace restricts access.
+
+## Importing an external review dataset
+
+To retain an authorised CSV dataset (or a ZIP containing one CSV) for later
+human labelling and ML evaluation:
+
+```powershell
+python scripts/import_external_reviews.py path\to\dataset.zip
+```
+
+The importer preserves an external `label` column exactly as supplied. Confirm
+the dataset documentation before mapping binary labels to genuine, suspicious,
+or AI-generated classes.
+
+For the supplied `archive.zip` Fake Reviews Dataset, the documented mapping is
+`0 = original/human review` and `1 = computer-generated fake review`. Keep this
+source label separate from the app's live “suspicious” signal: a model trained
+on this dataset detects patterns represented in that dataset and must be
+evaluated separately on live marketplace reviews.
 
 ## Design notes
 
