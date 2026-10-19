@@ -51,6 +51,11 @@ class Candidate(BaseModel):
     image_url: str | None = None
     status: Literal["verified", "candidate", "unverified"]
     reason: str
+    # Set only by the extended cross-store matcher (app/matcher.py); None for legacy matches.
+    match_source: str | None = None
+    match_score: float | None = None
+    match_reasons: list[str] = []
+    match_flags: list[str] = []
 
 class Finding(BaseModel):
     text: str
@@ -62,6 +67,12 @@ class Finding(BaseModel):
     classification: Literal["genuine-looking", "suspicious", "needs-review"] = "needs-review"
     classification_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     signals: list[str] = []
+    # Filled when the trained text model judged this review (app/ml_detector.py).
+    ml_fake_probability: float | None = None
+    detector: str = "rules"
+    # Lets the UI save a person's Real/Fake label for this review (app/review_labels.py).
+    review_hash: str | None = None
+    human_label: str | None = None
 
 class TrustScore(BaseModel):
     score: float | None = None

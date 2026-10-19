@@ -23,11 +23,24 @@ USER_AGENT = (
 APIFY_DEFAULT_ACTOR = "pro100chok/amazon-scraper"
 
 
+MAX_REVIEW_LIMIT = 1000
+
+
 def _configured_limit(default: int) -> int:
+    """Reviews to request from the provider (APIFY_REVIEW_LIMIT, capped at MAX_REVIEW_LIMIT)."""
     try:
-        return max(1, min(int(os.getenv("APIFY_REVIEW_LIMIT", str(default))), 100))
+        return max(1, min(int(os.getenv("APIFY_REVIEW_LIMIT", str(default))), MAX_REVIEW_LIMIT))
     except ValueError:
         return default
+
+
+def _apify_timeout(limit: int) -> float:
+    """Larger review pulls take longer; APIFY_TIMEOUT_SECONDS overrides (Apify's sync endpoint ends at 300s)."""
+    try:
+        configured = float(os.getenv("APIFY_TIMEOUT_SECONDS", ""))
+    except ValueError:
+        configured = 0.0
+    return min(290.0, configured if configured > 0 else 80.0 + limit * 0.4)
 
 
 def _rating(value: str | None) -> int | None:
@@ -93,7 +106,7 @@ def _integer(value: Any) -> int | None:
     return int(parsed) if parsed is not None else None
 
 
-def _run_apify_actor(actor: str, actor_input: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+def _run_apify_actor(actor: str, actor_input: dict[str, Any], timeout: float = 80.0) -> tuple[list[dict[str, Any]], str]:
     token = os.getenv("APIFY_API_TOKEN", "").strip()
     if not token:
         return [], "Apify is not configured (add APIFY_API_TOKEN to .env)."
@@ -103,7 +116,7 @@ def _run_apify_actor(actor: str, actor_input: dict[str, Any]) -> tuple[list[dict
     actor_id = actor.replace("/", "~", 1)
     endpoint = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
     try:
-        with httpx.Client(timeout=80.0) as client:
+        with httpx.Client(timeout=timeout) as client:
             response = client.post(endpoint, params={"token": token}, json=actor_input)
             response.raise_for_status()
         payload = response.json()
@@ -158,7 +171,7 @@ def collect_apify_amazon_reviews(product_url: str, limit: int = 20) -> tuple[lis
         "marketplace": _marketplace(product_url),
         "maxItemsPerInput": limit,
     }
-    records, error = _run_apify_actor(actor, actor_input)
+    records, error = _run_apify_actor(actor, actor_input, timeout=_apify_timeout(limit))
     if error:
         return [], f"Apify review request: {error}"
     reviews = _normalise_apify_reviews(records, limit)

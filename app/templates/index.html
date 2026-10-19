@@ -33,7 +33,7 @@
   <section class="search">
     <label for="url">Product listing URL</label>
     <div>
-      <input id="url" placeholder="Paste an Amazon, Flipkart, Meesho, Croma, Nykaa, or Myntra product URL">
+      <input id="url" placeholder="Paste any online store's product URL (Amazon, Flipkart, Croma, Reliance Digital, Vijay Sales, Snapdeal, Nykaa, Myntra, …)">
       <button id="run">Run live analysis <b>→</b></button>
     </div>
     <p id="status">Ready to fetch a live product page. Rendered DOM metadata & direct match routes will be extracted.</p>
@@ -91,8 +91,8 @@
       <article class="wide">
         <header>
           <div>
-            <p class="kicker">BUYHATKE-STYLE 6-MONTH PRICE TRACKER & MULTI-STORE MATCHES</p>
-            <h3>Price history & multi-modal store comparison points</h3>
+            <p class="kicker">SAME PRODUCT, EVERY STORE &middot; REAL OBSERVED PRICES ONLY</p>
+            <h3>Price by store &amp; observed price history</h3>
           </div>
           <div class="range-toggles">
             <button class="btn-range" data-range="30">1M</button>
@@ -102,6 +102,13 @@
           </div>
         </header>
         
+        <div id="lowestBanner" class="lowest-banner" hidden>
+          <span class="lowest-star" aria-hidden="true">★</span>
+          <strong id="lowestBannerText">—</strong>
+          <a id="lowestBannerLink" href="#" target="_blank" rel="noreferrer">Open listing ↗</a>
+        </div>
+        <p id="pendingStores" class="graph-note" hidden>Other stores are still being searched; they will appear here as they are read.</p>
+
         <div class="price-indicator-row">
           <span id="priceIndicator" class="price-indicator-badge">📈 Loading 6-month historical price range…</span>
         </div>
@@ -118,7 +125,13 @@
           <p>💳 <strong>Observed store offer:</strong> <span id="offerVal">Not exposed by the listing</span></p>
         </div>
 
-        <canvas id="priceChart"></canvas>
+        <h4 class="graph-title">Price today, by store</h4>
+        <div id="storeBarsWrap" class="store-bars-wrap"><canvas id="storeBars" aria-label="Price by store"></canvas></div>
+        <div id="storeLegend" class="store-legend"></div>
+
+        <h4 class="graph-title">Observed price history <small>(only prices actually seen; nothing is estimated)</small></h4>
+        <p id="historyNote" class="graph-note" hidden></p>
+        <div id="historyWrap"><canvas id="priceChart"></canvas></div>
         <div id="chartPointInfo" class="chart-point-card" hidden style="margin-top: 12px; padding: 12px; background: rgba(127, 240, 209, 0.08); border: 1px solid rgba(127, 240, 209, 0.3); border-radius: 8px; color: #e2e8f0;">
           <strong id="chartPointTitle" style="color: #7ff0d1;">Store Point Selected</strong>
           <p id="chartPointDesc" style="margin: 4px 0; font-size: 0.85rem; color: #9da5bb;"></p>
@@ -159,7 +172,7 @@
             <li><b>Metadata Audit:</b> Verified ASIN/SKU, Brand, Price & High-Res Product Image.</li>
             <li><b>Review evidence:</b> Flags duplicate text, promotional phrasing, and rating/sentiment mismatches. “Genuine-looking” is not proof of human authorship.</li>
             <li><b>Price History:</b> Retains real observations collected for this listing over time.</li>
-            <li><b>Cross-Platform Matching:</b> Ran multi-modal title + image hash match across Flipkart, Amazon, Croma, Nykaa, Myntra.</li>
+            <li><b>Cross-Platform Matching:</b> Whatever store the link is from, the same product is searched on every other applicable store (Amazon, Flipkart, Croma, Reliance Digital, Vijay Sales, Tata CLiQ, Snapdeal, Myntra, Ajio, Nykaa, Decathlon). Only <i>verified</i> in-stock listings can be the lowest price.</li>
           </ul>
         </div>
         <div class="citation-box">

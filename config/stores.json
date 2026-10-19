@@ -1,0 +1,203 @@
+{
+  "_comment": "Store registry for the multi-store product matcher (scraper_search.js + app/multistore.py). 'categories' use the labels from app.engines.product_category plus 'all'. Only public search pages are opened; no sign-in, CAPTCHA or bot-protection handling is attempted. A store that blocks the request is reported as 'blocked' and skipped.",
+  "stores": {
+    "Amazon": {
+      "host": "amazon.in",
+      "search": "https://www.amazon.in/s?k={q}",
+      "link_contains": [
+        "/dp/",
+        "/gp/product/"
+      ],
+      "categories": [
+        "all"
+      ],
+      "settle_ms": 1500
+    },
+    "Flipkart": {
+      "host": "flipkart.com",
+      "search": "https://www.flipkart.com/search?q={q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "all"
+      ],
+      "settle_ms": 1500
+    },
+    "Snapdeal": {
+      "host": "snapdeal.com",
+      "search": "https://www.snapdeal.com/search?keyword={q}&sort=rlvncy",
+      "link_contains": [
+        "/product/"
+      ],
+      "categories": [
+        "all"
+      ],
+      "settle_ms": 2500
+    },
+    "Croma": {
+      "host": "croma.com",
+      "search": "https://www.croma.com/searchB?q={q}%3Arelevance&text={q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "electronics",
+        "general"
+      ],
+      "settle_ms": 6000,
+      "max_wait_ms": 16000
+    },
+    "Reliance Digital": {
+      "host": "reliancedigital.in",
+      "search": "https://www.reliancedigital.in/products?q={q}",
+      "link_contains": [
+        "/p/",
+        "/product/"
+      ],
+      "categories": [
+        "electronics",
+        "general"
+      ],
+      "settle_ms": 6000,
+      "max_wait_ms": 16000
+    },
+    "Tata CLiQ": {
+      "host": "tatacliq.com",
+      "search": "https://www.tatacliq.com/search/?searchCategory=all&text={q}",
+      "link_contains": [
+        "/p-"
+      ],
+      "categories": [
+        "electronics",
+        "fashion",
+        "beauty",
+        "bags",
+        "general"
+      ],
+      "settle_ms": 6000,
+      "max_wait_ms": 16000,
+      "json_capture": {
+        "url_contains": "searchbff.tatacliq.com/products/mpl/search?",
+        "list_path": "searchresult",
+        "base_url": "https://www.tatacliq.com",
+        "fields": {
+          "title": "productname",
+          "url": "webURL",
+          "price": "price.sellingPrice.doubleValue",
+          "mrp": "price.mrpPrice.doubleValue",
+          "rating": "averageRating",
+          "review_count": "ratingCount",
+          "image_url": "imageURL"
+        }
+      }
+    },
+    "JioMart": {
+      "host": "jiomart.com",
+      "search": "https://www.jiomart.com/search/{q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "grocery",
+        "beauty",
+        "electronics",
+        "general"
+      ],
+      "settle_ms": 5000,
+      "max_wait_ms": 16000,
+      "enabled": false,
+      "disabled_reason": "Search page returns a 'page not found' view to a plain headless request."
+    },
+    "Vijay Sales": {
+      "host": "vijaysales.com",
+      "search": "https://www.vijaysales.com/search-listing?q={q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "electronics"
+      ],
+      "settle_ms": 5000,
+      "max_wait_ms": 16000
+    },
+    "Myntra": {
+      "host": "myntra.com",
+      "search": "https://www.myntra.com/{slug}",
+      "link_contains": [
+        "/buy",
+        "myntra.com/"
+      ],
+      "categories": [
+        "fashion",
+        "beauty",
+        "bags"
+      ],
+      "settle_ms": 2500
+    },
+    "Ajio": {
+      "host": "ajio.com",
+      "search": "https://www.ajio.com/search/?text={q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "fashion",
+        "bags"
+      ],
+      "settle_ms": 3000
+    },
+    "Nykaa": {
+      "host": "nykaa.com",
+      "search": "https://www.nykaa.com/search/result/?q={q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "beauty"
+      ],
+      "settle_ms": 3000
+    },
+    "Meesho": {
+      "host": "meesho.com",
+      "search": "https://www.meesho.com/search?q={q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "fashion",
+        "bags",
+        "general"
+      ],
+      "settle_ms": 3500,
+      "enabled": false,
+      "disabled_reason": "Search returns 'no results' to a plain headless request."
+    },
+    "BigBasket": {
+      "host": "bigbasket.com",
+      "search": "https://www.bigbasket.com/ps/?q={q}",
+      "link_contains": [
+        "/pd/"
+      ],
+      "categories": [
+        "grocery"
+      ],
+      "settle_ms": 4000,
+      "enabled": false,
+      "disabled_reason": "Renders a location-gated shell with no product cards."
+    },
+    "Decathlon": {
+      "host": "decathlon.in",
+      "search": "https://www.decathlon.in/search?query={q}",
+      "link_contains": [
+        "/p/"
+      ],
+      "categories": [
+        "fashion",
+        "bags",
+        "general"
+      ],
+      "settle_ms": 3000
+    }
+  }
+}

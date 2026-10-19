@@ -1,0 +1,7 @@
+# Optional: only needed to train or serve the transformer review classifier
+# (scripts/train_transformer_classifier.py, REVIEW_MODEL_BACKEND=transformer).
+# The TF-IDF model and the rest of the app work without these.
+-r requirements.txt
+torch==2.14.1
+transformers==5.20.0
+safetensors==0.8.0

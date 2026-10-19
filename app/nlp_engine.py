@@ -14,7 +14,10 @@ import re, math, statistics
 from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 
+from . import ml_detector
 from .models import Finding, Product, Review, ReviewBurstSummary, TrustScore
+from .review_labels import review_hash
+from .review_signals import review_burst
 
 SYNTHETIC_PATTERNS = [
     r"\b(?:best product ever|buy fast|must buy now|cheap price good|good good|amazing wow)\b",
@@ -113,10 +116,15 @@ class ReviewIntegrityClassifier:
         return sentiment, translation, signals, risk, mismatch_val, classification, confidence
 
 
+FAST_DUPLICATE_THRESHOLD = 150   # above this many reviews the pairwise SequenceMatcher scan is too slow
+
+
 def _near_duplicate_indices(reviews: list[Review]) -> set[int]:
     """Identify similar text inside only the reviews returned for this run."""
     duplicates: set[int] = set()
     normalised = [re.sub(r"\W+", " ", review.text.casefold()).strip() for review in reviews]
+    if len(normalised) > FAST_DUPLICATE_THRESHOLD:
+        return _near_duplicate_indices_fast(normalised)
     for index, text in enumerate(normalised):
         if len(text.split()) < 4:
             continue
@@ -129,6 +137,39 @@ def _near_duplicate_indices(reviews: list[Review]) -> set[int]:
                 break
     return duplicates
 
+
+def _near_duplicate_indices_fast(normalised: list[str]) -> set[int]:
+    """Word-trigram Jaccard over an inverted index: near-linear for large review sets."""
+    shingles: list[set[str] | None] = []
+    index: dict[str, list[int]] = {}
+    for position, text in enumerate(normalised):
+        words = text.split()
+        if len(words) < 4:
+            shingles.append(None)
+            continue
+        grams = {" ".join(words[i:i + 3]) for i in range(len(words) - 2)}
+        shingles.append(grams)
+        for gram in grams:
+            index.setdefault(gram, []).append(position)
+
+    duplicates: set[int] = set()
+    for position, grams in enumerate(shingles):
+        if not grams:
+            continue
+        shared: dict[int, int] = {}
+        for gram in grams:
+            bucket = index[gram]
+            if len(bucket) > 50:        # boilerplate phrase shared by many reviews
+                continue
+            for other in bucket:
+                if other < position:
+                    shared[other] = shared.get(other, 0) + 1
+        for other, overlap in shared.items():
+            union = len(grams) + len(shingles[other]) - overlap
+            if union and overlap / union >= 0.80:
+                duplicates.update((other, position))
+    return duplicates
+
 def compute_trust_score(product: Product, reviews: list[Review] | None = None) -> tuple[list[Finding], TrustScore, ReviewBurstSummary | None]:
     audited_reviews = reviews if (reviews is not None and len(reviews) > 0) else product.reviews
 
@@ -136,12 +177,21 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
     spam_count = 0
     sentiments = []
 
+    ml_scored = 0
     if audited_reviews:
         duplicate_indices = _near_duplicate_indices(audited_reviews)
+        # Trained text model (optional): one batched call, None where it should not judge.
+        ml_probabilities = ml_detector.predict([r.text for r in audited_reviews])
         for index, r in enumerate(audited_reviews):
             sent, trans, sigs, risk, mismatch_val, classification, classification_confidence = ReviewIntegrityClassifier.predict(
                 r, near_duplicate=index in duplicate_indices
             )
+            ml_probability, detector = ml_probabilities[index], "rules"
+            if ml_probability is not None:
+                merged = ml_detector.assess(classification, classification_confidence, risk, sigs, r.text, ml_probability)
+                classification, classification_confidence = merged.classification, merged.confidence
+                risk, sigs, detector = merged.risk, merged.signals, merged.detector
+                ml_scored += 1
             sentiments.append(sent)
 
             if classification == "suspicious":
@@ -158,6 +208,9 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
                 mismatch=mismatch_val,
                 classification=classification,
                 classification_confidence=classification_confidence,
+                ml_fake_probability=ml_probability,
+                detector=detector,
+                review_hash=review_hash(r.text),
             ))
 
     has_title = bool(product.title and product.title.strip())
@@ -176,9 +229,14 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
 
     p3 = 20.0 if has_price else 10.0
 
+    suspicious_share = None
     if audited_reviews:
         duplication_ratio = round(len(set(r.text for r in audited_reviews)) / max(1, len(audited_reviews)), 2)
+        suspicious_share = round(spam_count / len(audited_reviews), 2)
         p4 = round(duplication_ratio * 20.0, 1)
+        if ml_scored:
+            # With the trained text model active, flagged reviews lower this component too.
+            p4 = round(duplication_ratio * (1.0 - suspicious_share) * 20.0, 1)
     else:
         duplication_ratio = None
         p4 = 10.0
@@ -209,10 +267,12 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
             "price_market_realism": p3,
             "review_text_integrity": p4,
             "duplication_ratio": duplication_ratio,
+            "suspicious_review_share": suspicious_share,
+            "reviews_scored_by_text_model": float(ml_scored),
         },
         raw_rating=raw_r,
         adjusted_rating=adj_r,
         spam_filtered_count=spam_count
     )
 
-    return findings, t_score, None
+    return findings, t_score, review_burst(audited_reviews) if audited_reviews else None

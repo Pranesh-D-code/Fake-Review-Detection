@@ -108,3 +108,33 @@
   background-size: 200% 100%;
   animation: shimmer 1.6s infinite;
 }
+
+/* ---- Cross-store price comparison (any source store) ---- */
+.lowest-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;padding:12px 16px;border-radius:10px;background:rgba(241,198,107,.1);border:1px solid rgba(241,198,107,.5);color:var(--text)}
+.lowest-banner.none{background:rgba(157,165,187,.08);border-color:var(--line)}
+.lowest-banner .lowest-star{color:var(--amber);font-size:18px}
+.lowest-banner strong{font-size:15px;flex:1 1 220px;min-width:0;overflow-wrap:anywhere}.lowest-banner a{font:12px 'DM Mono';color:var(--aqua)}
+.graph-title{margin:18px 0 8px;font-size:13px;color:var(--text)}.graph-title small{color:var(--muted);font-weight:400}
+.graph-note{font:12px 'DM Mono';color:var(--muted);margin:8px 0;line-height:1.6}
+.store-bars-wrap{position:relative;width:100%}
+.store-legend{margin-top:12px}
+.store-row{display:grid;grid-template-columns:14px 1fr auto;gap:12px;align-items:start;padding:10px 0;border-top:1px solid var(--line)}
+.store-row.is-lowest{background:rgba(241,198,107,.06);border-left:3px solid var(--amber);padding-left:9px}
+.store-row.is-excluded{opacity:.7}
+.store-row .swatch{width:12px;height:12px;border-radius:3px;margin-top:3px;background:var(--c)}
+.store-row .swatch.hatched{background:repeating-linear-gradient(135deg,var(--c) 0 2px,transparent 2px 5px)}
+.store-main a{color:var(--text);font:13px Manrope;text-decoration:none}.store-main small{display:block;color:var(--muted);font-size:11px;margin-top:3px;line-height:1.45}
+.store-main .flag{color:#ffb86b}
+.store-price{text-align:right}.store-price strong{display:block;font-size:14px}.store-price small{color:var(--muted);font-size:11px}
+.legend-sep{font:11px 'DM Mono';color:var(--amber);margin:14px 0 4px}
+.graph-notes{margin:10px 0 0;padding-left:16px;color:var(--muted);font-size:11px;line-height:1.6}
+.searched-row{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}.searched-row small{color:var(--muted);font:11px 'DM Mono'}
+.searched{font:10px 'DM Mono';padding:3px 6px;border-radius:4px;border:1px solid var(--line)}.searched.ok{color:var(--aqua)}.searched.miss{color:var(--muted)}
+.tag-lowest{color:#1a1405;background:var(--amber);border-color:var(--amber);font-weight:700}
+.tag-source{color:var(--violet);border-color:rgba(156,140,255,.4);background:rgba(156,140,255,.08)}
+@media(max-width:760px){.store-row{grid-template-columns:14px 1fr}.store-price{grid-column:2;text-align:left}}
+.label-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;font:11px 'DM Mono';color:var(--muted)}
+.label-row.busy{opacity:.55;pointer-events:none}
+.label-row .btn-range{padding:5px 12px}
+.label-msg{margin-left:4px}
+.label-status{font:11px 'DM Mono';color:var(--aqua);margin-top:8px;line-height:1.5}
