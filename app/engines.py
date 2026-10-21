@@ -1,3 +1,4 @@
+
 """Live extraction and transparent analytical engine for Unified TrustEngine Platform.
 
 Integration Architecture:
@@ -6,6 +7,7 @@ Integration Architecture:
 3. Review Integrity Engine (app.nlp_engine): Performs an explainable NLP baseline for sentiment alignment, duplicate review detection, and suspicious-signal classification.
 4. Real Price Tracker Integration & Honest Empirical Price History.
 """
+
 from __future__ import annotations
 
 import hashlib, json, math, os, re, sqlite3, statistics, subprocess, sys, time
