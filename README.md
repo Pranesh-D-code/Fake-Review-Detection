@@ -106,6 +106,60 @@ python -m pytest tests                            # after pip install -r require
 (counts, model provenance) and `review_burst_summary` (daily-count z-score
 spikes, needs 15+ dated reviews). Each finding carries `ml_fake_probability`.
 
+### Reviews from any pasted link
+
+`app/review_collectors.py` reads the reviews a store shows to a logged-out visitor, whatever the store:
+
+1. **Store adapters** - Flipkart's public review pages (10 per request, several sort orders, up to ~150 reviews in
+   a few seconds). The first answer already carries a quick sample.
+2. **Reviews the page declares** in schema.org JSON-LD / microdata (Snapdeal, many others).
+3. **A Chrome scan** (`scraper_reviews.js`) for pages that draw their reviews with JavaScript: it scrolls, presses
+   the page's own "reviews" / "load more" controls and reads (a) the review JSON the page itself loaded
+   (Nykaa) and (b) repeated review blocks that each hold a star rating and prose (Myntra). Blocks are accepted
+   only inside a list of look-alikes, never from offers, descriptions or feedback forms.
+
+A store that shows a CAPTCHA / access-denied wall (Ajio) or shows no review text to visitors (Croma, Reliance
+Digital, Tata CLiQ, Vijay Sales for most products) simply yields no reviews, and the notice says so. Amazon shows its
+full list only to signed-in users, so it keeps the product page plus the Apify provider.
+`REVIEW_FETCH_LIMIT` (default 150) caps how many are read per link.
+
+### Speed
+
+- The first answer arrives in a few seconds for any store whose page declares its product (plain HTTP read, with
+  Chrome only as a fallback); Flipkart no longer starts Chrome for it.
+- Reviews, each store's matches and the Amazon provider run at the same time, and the page shows each as it
+  arrives instead of waiting for the slowest. The review model is loaded while the server starts.
+- The same link analysed again within 10 minutes is answered from memory in milliseconds.
+
+### Training data and what it can and cannot do
+
+```powershell
+python scripts/fetch_review_datasets.py                 # downloads ~42 MB of open datasets into data/external/
+python scripts/train_review_classifier.py --holdout-categories 0   # ~20 min; reads the Kaggle set in the database + those datasets
+```
+
+| Dataset | Licence | Used for |
+|---|---|---|
+| Kaggle fake-reviews set (already in `trustengine.db`) | CC BY 4.0 | real reviews + GPT-2-era fakes |
+| `Flowerly/modern-fake-reviews` (DeepSeek), `-glm`, `-lfm` | CC BY 4.0 | fakes written by present-day LLMs |
+| `janduplessis886/gp_surgery_reviews_fake_and_real` | MIT | **evaluation only** (different domain) |
+
+The reason for the modern sets: a model trained only on the Kaggle fakes catches about 94% of those fakes but only
+1-2% of reviews written by today's LLMs (measured in `models/review_detector.metrics.json`, probe `kaggle_only`).
+Trained with them, the model catches 97-99% of held-out modern fakes, and when one generator is left out of
+training it still catches 87-96% of that generator's fakes.
+
+On real reviews collected by the app (about 45 Amazon and 150 Flipkart reviews, of which only the ones with 10+ words are
+judged) it flags 6-17% as likely LLM-written and calls 40-50% genuine-looking. Nobody has
+labelled those, so how many of the flags are right is unknown; the polished ones it flags look machine-written, a few
+borderline ones look human. To stay cautious on shorter, differently-worded live reviews the flag never goes below
+`REVIEW_FLAG_MIN_PROBABILITY` (default 0.9). The previous model is kept as `models/review_detector.prev.joblib`.
+
+What it still cannot do: it does not carry over to other domains. On the UK GP-surgery set it is at chance
+(49% accuracy). It learns the style of LLM text *in product reviews*; it is not a general AI-text detector, it has
+not been checked on live marketplace reviews, and it cannot spot a human-written paid review. The metrics file
+lists all of this next to the headline numbers.
+
 ### Teaching the model with your own labels
 
 Under every review in the list there are **Real** and **Fake** buttons. Your choice is saved in
@@ -151,9 +205,61 @@ The original Amazon <-> Flipkart search is unchanged. On top of it,
 
 Stores are opened as an ordinary visitor would. A store that shows a
 CAPTCHA/access wall is reported as `blocked` and skipped; nothing tries to defeat
-it. JioMart, Meesho and BigBasket are disabled in `config/stores.json` because
-they return no products to a plain headless request. Set `ENHANCED_MATCHING=false`
-to run the legacy search only.
+it. Stores that return no products to a plain headless request (JioMart, Meesho,
+BigBasket, Ajio, ...) are disabled in `config/stores.json` with the reason beside
+each. Set `ENHANCED_MATCHING=false` to run the legacy search only.
+
+### Text + photo matching
+
+Every candidate is judged twice, independently, and the two must not contradict:
+
+- **Text** (`app/matcher.py`): brand, model code, RAM/storage/size/weight/SPF, variant words, accessory
+  and product-type conflicts, and words that name a different product ("conditioner" against "shampoo").
+  `tests/fixtures/match_pairs.json` holds 111 hand-written pairs across 9 categories; `scripts/evaluate_matcher.py` scores them.
+- **Photo** (`app/visual_match.py`): both store photos are trimmed to the product and embedded with DINOv2-small
+  (local weights, no per-request API call). Fetch the model once with `python scripts/fetch_visual_model.py`
+  (about 88 MB, Apache-2.0). Without it the app falls back to a perceptual hash and says so in the match
+  reason. A matching photo adds confidence; a clearly different photo blocks the *verified* status. On 1,100 real store photo pairs
+(labels from the text matcher, not hand-checked) DINOv2 separates same from different products with AUC 0.84 (0.80 against
+same-category look-alikes) against 0.59 for the old hash; at the chosen thresholds a photo verdict of *same* fires on 34% of
+true matches and 3% of different products, and *different* fires on 6% of true matches and 23% of different products. A photo
+alone cannot tell near-identical siblings (M35 / M36) apart, which is why the text decides and the photo only supports it.
+
+`python scripts/build_visual_pairs.py` collects real store photo pairs and `python scripts/evaluate_visual_matching.py`
+measures the photo methods and writes `models/visual/calibration.json` and `evaluation.json`. The pair labels come
+from the text matcher, not from a person, so those numbers show that the two signals agree, not hand-checked accuracy.
+
+### Exact and similar products
+
+Matches are split in two, and the page has a tab for each:
+
+- **Exact product**: verified to be the very same product (brand, model code, RAM/storage/size/weight, variant words,
+  edition, and the photo all agree). Only these count towards the *lowest price* and the price graph.
+- **Similar products**: the same brand and kind of product that differs in a way a shopper may care about, found by
+  similar text rather than the exact keyword: `Pro+` instead of `Pro`, 256 GB instead of 128 GB, the next model
+  number (`Revolution 6` for `Revolution 7`), `Ultraboost 5X` for `Ultraboost 5`, a special edition, another model
+  in the same range. Each card says **what is different**, and similar prices are never used as the lowest price.
+  Accessories, other brands, other kinds of product, other genders and second-hand units are not listed at all.
+
+Listings the matcher cannot confirm but also cannot rule out are shown as *Possible, not confirmed* on the similar tab.
+
+### Links that open
+
+Before a match is listed, its link is opened once (`app/link_check.py`). A link the store says is gone (404/410), that
+redirects to the home page or to a search/category page, that shows a "not found" page, or that shows a different product
+is **dropped**. A page the store will not show to a plain request (403/CAPTCHA/built by script) gets a second look in the
+same headless-browser visit that reads ratings and identifiers; if that cannot read it either, the link is still listed
+but without the *link checked* tick. Nothing tries to get past a CAPTCHA or access wall. `LINK_CHECK=false` switches this off.
+
+Measured on live runs (a Samsung phone and an Adidas shoe): every link marked *checked* opened on the product when
+re-opened in a separate browser; the unchecked ones were Ajio (403 to automated browsers) and Tata CLiQ (page built by
+script), and Amazon's pages could not be read by a plain request. Whether those open for a person was not testable here.
+
+### Quiet browsers
+
+Nothing opens a visible window. Chrome is started headless (`browser_launch.js`) and every Python child process is
+created without a console (`app/proc.py`). Headless mode is not a way round bot defences: pages that show a
+CAPTCHA or access wall are still reported as blocked.
 
 ## Any store link, every other store, one price comparison
 

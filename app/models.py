@@ -56,6 +56,15 @@ class Candidate(BaseModel):
     match_score: float | None = None
     match_reasons: list[str] = []
     match_flags: list[str] = []
+    # "exact" = verified to be the same product; "similar" = same make and kind of product that differs in a way
+    # listed in `differences` (shown apart, never used for the lowest price).
+    relation: Literal["exact", "similar"] = "exact"
+    differences: list[str] = []
+    closeness: float | None = None
+    # app/link_check.py: "ok" = the page opened and shows the product; "unchecked" = the store would not let a
+    # check through (normally fine in a browser). Links the store says are dead are never listed.
+    link_status: Literal["ok", "unchecked"] | None = None
+    link_note: str | None = None
 
 class Finding(BaseModel):
     text: str
@@ -73,6 +82,10 @@ class Finding(BaseModel):
     # Lets the UI save a person's Real/Fake label for this review (app/review_labels.py).
     review_hash: str | None = None
     human_label: str | None = None
+    # The two-way answer shown to the user. 'limited' = thin or mixed evidence (short text, close call).
+    verdict: Literal["genuine", "not_genuine"] = "genuine"
+    verdict_certainty: Literal["clear", "limited"] = "limited"
+    verdict_note: str | None = None
 
 class TrustScore(BaseModel):
     score: float | None = None

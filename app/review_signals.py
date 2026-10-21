@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .models import Review, ReviewBurstSummary
 
@@ -21,6 +21,7 @@ _MONTHS = {name: number for number, names in enumerate((
     ("january", "jan"), ("february", "feb"), ("march", "mar"), ("april", "apr"), ("may",), ("june", "jun"),
     ("july", "jul"), ("august", "aug"), ("september", "sep", "sept"), ("october", "oct"),
     ("november", "nov"), ("december", "dec")), start=1) for name in names}
+_RELATIVE = re.compile(r"(today|just now|yesterday)|(\d+)\s*(second|minute|hour|day|week|month|year)s?\s+ago")
 _DAY_MONTH_YEAR = re.compile(r"(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?,?\s+(\d{4})")
 _MONTH_DAY_YEAR = re.compile(r"([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})")
 
@@ -30,6 +31,21 @@ def parse_review_date(value: object) -> datetime | None:
     if not value:
         return None
     text = str(value).strip()
+    relative = _RELATIVE.fullmatch(text.casefold())
+    if relative:                                    # "Today", "3 days ago": a day is exact; "2 months ago" is not, so no date
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        if relative.group(1) in ("today", "just now"):
+            return today
+        if relative.group(1) == "yesterday":
+            return today - timedelta(days=1)
+        number, unit = int(relative.group(2)), relative.group(3)
+        if unit.startswith(("hour", "minute", "second")):
+            return today
+        if unit.startswith("day"):
+            return today - timedelta(days=number)
+        if unit.startswith("week"):
+            return today - timedelta(weeks=number)
+        return None
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
@@ -52,6 +68,8 @@ def parse_review_date(value: object) -> datetime | None:
 def review_burst(reviews: list[Review], now: datetime | None = None) -> ReviewBurstSummary | None:
     dated = [r.timestamp for r in reviews if r.timestamp]
     if len(dated) < MIN_DATED_REVIEWS:
+        return None
+    if len(dated) < 0.8 * len(reviews):      # exact days exist only for some reviews (e.g. just the newest): a burst on that slice would be invented
         return None
     now = now or datetime.now(timezone.utc)
     days = [d.astimezone(timezone.utc).date() for d in dated]
@@ -87,6 +105,8 @@ def summarise_findings(findings: list) -> dict:
     scored = sum(1 for f in findings if getattr(f, "ml_fake_probability", None) is not None)
     summary: dict = {
         "total_reviews": total,
+        "genuine": sum(1 for f in findings if getattr(f, "verdict", "genuine") == "genuine"),
+        "not_genuine": sum(1 for f in findings if getattr(f, "verdict", "genuine") == "not_genuine"),
         "suspicious": counts.get("suspicious", 0),
         "genuine_looking": counts.get("genuine-looking", 0),
         "needs_review": counts.get("needs-review", 0),

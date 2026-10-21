@@ -198,6 +198,288 @@
         "general"
       ],
       "settle_ms": 3000
+    },
+    "Purplle": {
+      "host": "purplle.com",
+      "search": "https://www.purplle.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "beauty"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true
+    },
+    "Tira": {
+      "host": "tirabeauty.com",
+      "search": "https://www.tirabeauty.com/products/?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "beauty"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true
+    },
+    "FirstCry": {
+      "host": "firstcry.com",
+      "search": "https://www.firstcry.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "kids",
+        "fashion",
+        "general"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Search cards expose no readable price."
+    },
+    "Pepperfry": {
+      "host": "pepperfry.com",
+      "search": "https://www.pepperfry.com/site_product/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "home"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true
+    },
+    "Urban Ladder": {
+      "host": "urbanladder.com",
+      "search": "https://www.urbanladder.com/products/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "home"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true
+    },
+    "IKEA": {
+      "host": "ikea.com",
+      "search": "https://www.ikea.com/in/en/search/?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "home",
+        "general"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "No product cards appear for a plain request."
+    },
+    "Lenskart": {
+      "host": "lenskart.com",
+      "search": "https://www.lenskart.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "fashion",
+        "general"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "No product cards appear for a plain request."
+    },
+    "Shoppers Stop": {
+      "host": "shoppersstop.com",
+      "search": "https://www.shoppersstop.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "fashion",
+        "beauty",
+        "bags"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Search page returns HTTP 404 to a plain request."
+    },
+    "Lifestyle": {
+      "host": "lifestylestores.com",
+      "search": "https://www.lifestylestores.com/in/en/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "fashion",
+        "bags"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true
+    },
+    "Bewakoof": {
+      "host": "bewakoof.com",
+      "search": "https://www.bewakoof.com/search/{q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "fashion"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Search page returns HTTP 404 to a plain request."
+    },
+    "Pantaloons": {
+      "host": "pantaloons.com",
+      "search": "https://www.pantaloons.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "fashion"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Search page returns HTTP 404 to a plain request."
+    },
+    "Poorvika": {
+      "host": "poorvika.com",
+      "search": "https://www.poorvika.com/s?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "electronics"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "No product cards appear for a plain request."
+    },
+    "Sangeetha": {
+      "host": "sangeethamobiles.com",
+      "search": "https://www.sangeethamobiles.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "electronics"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Search page returns HTTP 404 to a plain request."
+    },
+    "boAt": {
+      "host": "boat-lifestyle.com",
+      "search": "https://www.boat-lifestyle.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "electronics"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "No product cards appear for a plain request."
+    },
+    "HealthKart": {
+      "host": "healthkart.com",
+      "search": "https://www.healthkart.com/search?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "health",
+        "grocery"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true
+    },
+    "PharmEasy": {
+      "host": "pharmeasy.in",
+      "search": "https://pharmeasy.in/search/all?name={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "health"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Medicines are out of scope (titles carry no product identity)."
+    },
+    "Tata 1mg": {
+      "host": "1mg.com",
+      "search": "https://www.1mg.com/search/all?name={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "health"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Medicines are out of scope; card titles contain markup."
+    },
+    "Samsung Shop": {
+      "host": "samsung.com",
+      "search": "https://www.samsung.com/in/search/?searchvalue={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "electronics"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": false,
+      "disabled_reason": "Not probed successfully."
+    },
+    "Lenovo": {
+      "host": "lenovo.com",
+      "search": "https://www.lenovo.com/in/en/search?text={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "electronics"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true,
+      "brand": "lenovo"
+    },
+    "HP World": {
+      "host": "hp.com",
+      "search": "https://www.hp.com/in-en/shop/catalogsearch/result/?q={q}",
+      "link_contains": [
+        "*"
+      ],
+      "categories": [
+        "electronics"
+      ],
+      "settle_ms": 3500,
+      "max_wait_ms": 14000,
+      "enabled": true,
+      "brand": "hp"
     }
   }
 }

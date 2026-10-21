@@ -1,0 +1,12 @@
+{
+  "dinov2": {
+    "slope": 5.9642,
+    "intercept": -3.926,
+    "same_at": 0.8106,
+    "different_below": 0.0528
+  },
+  "phash": {
+    "same_at": 0.9,
+    "different_below": 0.6
+  }
+}

@@ -11,7 +11,7 @@ def test_marketplace_date_phrases_are_parsed():
     assert parse_review_date("Reviewed in India on 5 March 2024").date().isoformat() == "2024-03-05"
     assert parse_review_date("March 5, 2024").date().isoformat() == "2024-03-05"
     assert parse_review_date("2024-03-05T10:00:00Z").date().isoformat() == "2024-03-05"
-    assert parse_review_date("yesterday") is None and parse_review_date(None) is None
+    assert parse_review_date("sometime last year") is None and parse_review_date(None) is None
 
 
 def _reviews(spec):
@@ -44,3 +44,23 @@ def test_fast_duplicate_scan_finds_what_the_exact_scan_finds():
     reviews = [Review(text=t, rating=3) for t in texts]
     assert _near_duplicate_indices_fast([t.lower() for t in texts]) == _near_duplicate_indices(reviews) == {0, 1}
     assert FAST_DUPLICATE_THRESHOLD >= 100
+
+
+def test_burst_is_not_computed_when_only_the_newest_reviews_carry_an_exact_date():
+    """Flipkart gives exact days only for recent reviews ("3 days ago") and months for older ones; z-scores on that
+    biased slice would invent a burst. Below 80% dated coverage there is no burst summary at all."""
+    dated = _reviews([(d, 1) for d in range(1, 21)])
+    undated = [Review(text=f"older review {i}", rating=4) for i in range(60)]
+    assert review_burst(dated + undated, now=NOW) is None
+    assert review_burst(dated + undated[:3], now=NOW) is not None
+
+
+def test_every_review_gets_a_two_way_verdict():
+    from app.nlp_engine import review_verdict
+    assert review_verdict("suspicious", 0.9, 0.99) == ("not_genuine", "clear", None)
+    assert review_verdict("suspicious", 0.5, None) == ("not_genuine", "limited", None)
+    assert review_verdict("genuine-looking", 0.9, 0.01) == ("genuine", "clear", None)
+    assert review_verdict("genuine-looking", 0.58, None) == ("genuine", "limited", None)
+    assert review_verdict("needs-review", 0.45, 0.7) == ("not_genuine", "limited", "close call")      # leans AI-written, below the flag
+    assert review_verdict("needs-review", 0.45, 0.2) == ("genuine", "limited", "close call")
+    assert review_verdict("needs-review", 0.35, None) == ("genuine", "limited", "too short to judge")  # too short for the model, no warning sign

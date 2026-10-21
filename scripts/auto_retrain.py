@@ -88,7 +88,9 @@ def main() -> int:
     if CANDIDATE.exists():
         shutil.rmtree(CANDIDATE)
 
-    kwargs = {"cwd": str(ROOT), "capture_output": True, "encoding": "utf-8", "errors": "replace"}
+    sys.path.insert(0, str(ROOT))
+    from app.proc import hidden_kwargs
+    kwargs = {"cwd": str(ROOT), "capture_output": True, "encoding": "utf-8", "errors": "replace", **hidden_kwargs()}
     proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "train_review_classifier.py"),
                            "--out-dir", str(CANDIDATE), *args.trainer_args], **kwargs)
     if proc.returncode != 0:

@@ -7,8 +7,7 @@ pytestmark = pytest.mark.skipif(not ml_detector.is_available(), reason="train th
 
 GENERIC = ("I love this product. It is very good and works very well. The quality is great and the price is also "
            "very good. I would recommend this product to anyone who is looking for a good product.")
-SPECIFIC = ("Delivery was late by 3 days, packaging was torn, but the item itself is fine. Sound is a bit tinny at "
-            "high volume though bass is okay for the price. Returned the first piece because left side was dead.")
+SPECIFIC = ("got the green line after 2 days.replaced at service at free of cost but that is not the problem,it may come in future")      # a real Flipkart review
 
 
 def test_generic_repetitive_review_scores_high_and_specific_review_low():
@@ -45,3 +44,12 @@ def test_assess_falls_back_to_rules_without_a_probability():
 
 def test_explanation_names_driving_phrases():
     assert ml_detector.explain(GENERIC)
+
+
+def test_the_flag_threshold_never_drops_below_the_configured_floor(monkeypatch):
+    base = ["Too little evidence to classify this review reliably"]
+    monkeypatch.setenv("REVIEW_FLAG_MIN_PROBABILITY", "0.9")
+    assert ml_detector.assess("needs-review", 0.35, "medium", base, GENERIC, 0.86).classification != "suspicious"
+    assert ml_detector.assess("needs-review", 0.35, "medium", base, GENERIC, 0.93).classification == "suspicious"
+    monkeypatch.setenv("REVIEW_FLAG_MIN_PROBABILITY", "0.5")
+    assert ml_detector.assess("needs-review", 0.35, "medium", base, GENERIC, 0.86).classification == "suspicious"

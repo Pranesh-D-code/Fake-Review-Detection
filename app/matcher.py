@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from urllib.parse import unquote, urlparse
 
-from .product_identity import GENERIC_NAME_WORDS, STOPWORDS, STRONG_UNITS, ProductIdentity, normalise, parse_identity
+from .product_identity import BRAND_ALIASES, GENDERS, GENERIC_NAME_WORDS, KNOWN_BRANDS, STOPWORDS, STRONG_UNITS, ProductIdentity, normalise, parse_identity
 
 VERIFIED_SCORE = 0.72
 CANDIDATE_SCORE = 0.45
@@ -36,6 +36,13 @@ OUT_OF_STOCK_FLAG = "listed as out of stock"
 
 _CONDITION_LABELS = {"new": "new", "refurbished": "refurbished", "open_box": "open-box", "used": "pre-owned"}
 
+# A "similar" product is the same make and kind of thing that differs in a way a shopper may care about
+# ("Pro+" instead of "Pro", 256 GB instead of 128 GB, the next model number). Its price is never mixed into
+# the exact product's comparison. When nothing specific differs but identity could not be confirmed, this is said instead.
+UNCONFIRMED_NOTE = "could not confirm it is the identical product"
+_SPEC_LABELS = {"ram_gb": ("RAM", "GB"), "storage_gb": ("storage", "GB"), "g": ("weight", "g"), "ml": ("volume", "ml"),
+                "ton": ("capacity", "ton"), "pcs": ("pack of", ""), "star": ("energy rating", "star"), "spf": ("SPF", ""), "inch": ("screen", "inch")}
+
 
 @dataclass
 class MatchResult:
@@ -45,6 +52,9 @@ class MatchResult:
     flags: list[str] = field(default_factory=list)
     title_similarity: float = 0.0
     condition: str = "new"            # the candidate's own condition: "new" | "refurbished" | "open_box" | "used"
+    relation: str = "none"            # "exact" (verified) | "similar" (shown apart, with `differences`) | "none" (not shown)
+    differences: list[str] = field(default_factory=list)   # how a similar product differs, in plain words
+    closeness: float = 0.0            # 0..1 how near a similar product is (ranking only)
 
 
 def text_similarity(a: str, b: str) -> float:
@@ -84,6 +94,8 @@ def _code_present(code: str, haystack_words: list[str], compact_text: str) -> bo
 
 def _name_coverage(source: ProductIdentity, cand_words: set[str], cand_compact: str) -> float:
     head = [w for w in source.head_tokens if len(w) > 1]
+    # words that only say what kind of product it is ("laptop", "chip", "wireless") are often left out of other stores' titles
+    head = [w for w in head if w not in GENERIC_NAME_WORDS] or head
     if not head:
         return 0.0
     hits = 0
@@ -120,6 +132,57 @@ def _spec_check(source: ProductIdentity, cand: ProductIdentity) -> tuple[float, 
     if not compared:
         return 0.7, reasons, mismatches
     return agreed / compared, reasons, mismatches
+
+
+def _numbers(values) -> str:
+    return "/".join(f"{v:g}" for v in sorted(values))
+
+
+def _spec_notes(source: ProductIdentity, cand: ProductIdentity) -> list[str]:
+    """'storage 256 GB instead of 128 GB' for every hard spec both titles state and disagree on."""
+    strong = set(STRONG_UNITS)
+    if (source.types | cand.types) & {"tv", "laptop", "tablet"}:
+        strong.add("inch")
+    notes: list[str] = []
+    for unit, wanted in source.specs.items():
+        found = cand.specs.get(unit)
+        if not found or unit not in strong:
+            continue
+        if unit in ("ram_gb", "storage_gb"):
+            same = bool(wanted & found)
+        else:
+            same = any(abs(w - f) <= max(0.03 * w, 0.11) for w in wanted for f in found)
+        if same:
+            continue
+        label, suffix = _SPEC_LABELS.get(unit, (unit, ""))
+        tail = " " + suffix if suffix else ""
+        notes.append(f"{label} {_numbers(found)}{tail} instead of {_numbers(wanted)}{tail}")
+    return notes
+
+
+def _variant_note(source: ProductIdentity, cand: ProductIdentity) -> str:
+    only_source, only_cand = sorted(source.variants - cand.variants), sorted(cand.variants - source.variants)
+    name = lambda words: " ".join(w.capitalize() for w in words)
+    if only_cand and only_source:
+        return f"{name(only_cand)} version instead of {name(only_source)}"
+    if only_cand:
+        return f"the {name(only_cand)} version of this model"
+    return f"not the {name(only_source)} version"
+
+
+def _model_suffix_conflict(source: ProductIdentity, cand: ProductIdentity) -> str | None:
+    """"Ultraboost 5X" is not "Ultraboost 5": a letter stuck to the model number makes another model."""
+    suffixed = lambda identity: {w for w in identity.head_tokens if re.fullmatch(r"\d{1,3}[xsr]", w)}
+    source_suffixed, cand_suffixed = suffixed(source), suffixed(cand)
+    if source_suffixed == cand_suffixed:
+        return None
+    for word in cand_suffixed - source_suffixed:
+        if word[:-1] in source.bare_numbers:
+            return f"{word} instead of {word[:-1]}"
+    for word in source_suffixed - cand_suffixed:
+        if word[:-1] in cand.bare_numbers:
+            return f"{word[:-1]} instead of {word}"
+    return None
 
 
 def normalise_gtin(value: object) -> str | None:
@@ -168,6 +231,7 @@ def score_candidate(
     candidate_gtin: object = None,
     source_mpn: object = None,
     candidate_mpn: object = None,
+    visual_verdict: str | None = None,
 ) -> MatchResult:
     slug = url_slug_text(candidate_url)
     full_text = f"{candidate_title} {slug}".strip()
@@ -175,13 +239,25 @@ def score_candidate(
     cand_words = set(re.findall(r"[a-z0-9]+(?:[-'][a-z0-9]+)*", normalise(full_text)))
     cand_word_list = list(cand_words)
     cand_compact = _compact(full_text)
+    source_compact = _compact(source.title)
 
     reasons: list[str] = []
     flags: list[str] = []
+    numeric_note: str | None = None
     veto: str | None = None            # hard: cannot be the same product
     spec_conflict: str | None = None   # soft: same family, different storage/size/pack
+    blocked: str | None = None         # hard and final: not even a similar product (accessory, other brand / kind / gender ...)
+    name_extras: list[str] = []
 
     coverage = _name_coverage(source, cand_words | {w.replace("-", "") for w in cand_words}, cand_compact)
+    # words the candidate names that the source never does ("audi revolut team" on a plain "Ultraboost 5")
+    source_brand_words = set((source.brand or "").split())
+    known_words = set(source.head_tokens) | source.tokens
+    extras_all = [w for w in cand.head_tokens
+                  if len(w) > 2 and w.isalpha() and w not in known_words and w not in source_brand_words and w not in GENERIC_NAME_WORDS
+                  and w not in STOPWORDS and w not in GENDERS and w.replace("-", "") not in source_compact]
+    numeric_extras = [w for w in cand.head_tokens if re.search(r"\d", w) and w not in known_words and not re.fullmatch(r"\d+(?:gb|tb)", w)]
+    edition_conflict: str | None = None
     title_sim = round(SequenceMatcher(None, normalise(" ".join(source.head_tokens)), normalise(candidate_title)).ratio(), 3)
 
     # brand
@@ -194,6 +270,17 @@ def score_candidate(
         else:
             brand_score = 0.0
             flags.append("brand not found in candidate title")
+
+    # another make named early in the listing, and the source's make nowhere in it: not the same product
+    if source.brand:
+        wanted = {w for group in BRAND_ALIASES if any(a in _compact(source.brand) or _compact(source.brand) in a for a in group) for w in group}
+        wanted |= set(source.brand.split()) | {_compact(source.brand)}
+        early = [w for w in re.findall(r"[a-z0-9']+", normalise(candidate_title))[:5]] + [w for w in re.findall(r"[a-z0-9']+", normalise(slug))[:5]]
+        other = {w.replace("'", "") for w in early if w.replace("'", "") in KNOWN_BRANDS and w.replace("'", "") not in {x.replace("'", "") for x in wanted}}
+        mentions_source = any(w.replace("'", "") in cand_compact for w in wanted if len(w) > 1)
+        if other and not mentions_source:
+            veto = "different brand (" + ", ".join(sorted(other)) + ")"
+            blocked = veto
 
     # model codes
     model_score = 0.6
@@ -213,9 +300,19 @@ def score_candidate(
         distinctive = [w for w in source.head_tokens
                        if w not in brand_words and w not in GENERIC_NAME_WORDS and w not in STOPWORDS and (len(w) > 1 or w.isdigit())]
         if len(distinctive) >= 2:
-            seen = sum(1 for w in distinctive if w in cand_words or w.replace("-", "") in cand_compact)
-            if seen / len(distinctive) < 0.67:
-                flags.append("distinctive name words missing: " + ", ".join(w for w in distinctive if w not in cand_words))
+            present = lambda w: w in cand_words or w.replace("-", "") in cand_compact
+            names = [w for w in distinctive if not w.isdigit()]
+            numbers = [w for w in distinctive if w.isdigit()]
+            names_ok = not names or sum(1 for w in names if present(w)) / len(names) >= (0.5 if len(names) >= 2 else 1.0)
+            numbers_ok = all(present(w) for w in numbers)
+            # words the candidate adds that the source never uses ("conditioner" against "shampoo", "rice bran" against
+            # "sunflower"): when the source's own name words are missing as well, it is another product, not a shorter title
+            replaced = bool(extras_all) and any(not present(w) for w in names)
+            if replaced:
+                flags.append("candidate names other things: " + ", ".join(extras_all[:3]))
+                name_extras = extras_all[:3]
+            if not (names_ok and numbers_ok) or replaced:
+                flags.append("distinctive name words missing: " + ", ".join(w for w in distinctive if not present(w)))
                 veto = veto or "different product name"
 
     # hard specs
@@ -240,22 +337,47 @@ def score_candidate(
         flags.append(f"model number differs ({sorted(source.bare_numbers)} vs {sorted(cand.bare_numbers)})")
         veto = veto or "different model number"
 
+    suffix = _model_suffix_conflict(source, cand)
+    if suffix:
+        score -= 0.20
+        flags.append(f"model number differs ({suffix})")
+        veto = veto or "different model number"
+        numeric_note = suffix
+
+    if not source.model_codes and not veto:
+        # an edition name is a run of new words in a row ("audi revolut f1 team"); scattered description words are not
+        run: list[str] = []
+        best: list[str] = []
+        name_part = re.split(r"\s[-–—]\s|\||\(|,", candidate_title)[0]       # the name, not the description that follows it
+        for w in re.findall(r"[a-z0-9]+(?:[-'][a-z0-9]+)*", normalise(name_part)):
+            novel = (len(w) > 1 and w not in known_words and w not in source_brand_words and w not in GENERIC_NAME_WORDS and w not in STOPWORDS
+                     and w not in GENDERS and w.replace("-", "") not in source_compact and not re.fullmatch(r"\d+(?:gb|tb)?", w))
+            run = run + [w] if novel else []
+            if len(run) > len(best):
+                best = list(run)
+        if len(best) >= 3:
+            edition_conflict = "different edition or range (" + ", ".join(best[:4]) + ")"
+
     if source.genders and cand.genders and not (source.genders & cand.genders):
         score -= 0.25
         veto = veto or "different target gender"
+        blocked = blocked or "different target gender"
 
     if source.types and cand.types and not (source.types & cand.types):
         score -= 0.20
         flags.append("product type differs")
         veto = veto or "different product type"
+        blocked = blocked or "different product type"
 
     # accessories are never the same product
     if cand.is_accessory and not source.is_accessory:
         score = min(score, 0.20)
         veto = "accessory listing, not the product itself"
+        blocked = veto
     elif source.is_accessory and not cand.is_accessory:
         score = min(score, 0.30)
         veto = veto or "source is an accessory; candidate is a main product"
+        blocked = blocked or veto
 
     # condition: a refurbished / pre-owned / open-box unit is another offer from a new one (either direction)
     condition_conflict: str | None = None
@@ -265,6 +387,7 @@ def score_candidate(
         if "new" in (source.condition, cand.condition):
             score = min(score, 0.30)
             veto = veto or "different condition: " + pair
+            blocked = blocked or "different condition: " + pair
         else:
             condition_conflict = "different condition: " + pair      # e.g. refurbished vs pre-owned: same unit family, other grade
     elif source.condition != "new":
@@ -310,12 +433,23 @@ def score_candidate(
             score -= 0.25
             flags.append(f"price far from source (x{ratio:.2f})")
             veto = veto or "price is implausible for the same product"
+            blocked = blocked or "price is implausible for the same product"
         elif ratio < 0.5 or ratio > 2:
             score -= 0.08
             flags.append(f"price differs a lot (x{ratio:.2f})")
 
-    # image similarity only supports; different shots of one product often hash differently
-    if image_similarity is not None:
+    # The photo is a second, independent line of evidence (app/visual_match.py judges "same" / "different" / "unclear").
+    visual_same = visual_verdict == "same"
+    visual_different = visual_verdict == "different"
+    if visual_verdict is not None:
+        if visual_same:
+            score += 0.10
+            reasons.append(f"photo matches ({image_similarity:.0%})" if image_similarity is not None else "photo matches")
+        elif visual_different:
+            score -= 0.10
+            flags.append(f"photo looks different ({image_similarity:.0%})" if image_similarity is not None else "photo looks different")
+    elif image_similarity is not None:
+        # no verdict (older callers): the plain thresholds. Different shots of one product often hash differently.
         if image_similarity >= 0.80:
             score += 0.10
             reasons.append(f"image similarity {image_similarity:.0%}")
@@ -333,17 +467,64 @@ def score_candidate(
     if condition_conflict:
         score = min(score, VERIFIED_SCORE - 0.05)
         flags.append(condition_conflict)
+    if edition_conflict:
+        score = min(score, VERIFIED_SCORE - 0.05)
+        flags.append(edition_conflict)
 
     identified = identifier_match or bool(source.model_codes and model_score >= 1.0) or (
         not source.model_codes and coverage >= 0.8 and brand_score >= 0.5
     )
     if veto or score < CANDIDATE_SCORE:
         status = "rejected"
-    elif score >= VERIFIED_SCORE and identified and not spec_conflict and not condition_conflict:
+    elif score >= VERIFIED_SCORE and identified and not spec_conflict and not condition_conflict and not edition_conflict and not visual_different:
         status = "verified"
+    elif (visual_same and not spec_conflict and not condition_conflict and not edition_conflict and brand_score >= 0.5 and coverage >= 0.75
+          and (not source.model_codes or model_score > 0)):
+        # the title only partly agrees but the photo clearly shows the same item, and nothing contradicts it
+        status = "verified"
+        reasons.append("title and photo both match")
     else:
         status = "candidate"
     # What the card shows as "Text Match": the legacy full-title measure, or the share of the product's
     # key words the listing repeats if that is higher (long marketing titles dilute word overlap).
     shown = round(max(text_similarity(source.title, candidate_title), coverage if source.head_tokens else 0.0), 3)
-    return MatchResult(score=score, status=status, reasons=reasons, flags=flags, title_similarity=shown, condition=cand.condition)
+
+    # exact / similar / not shown
+    closeness = round(0.5 * coverage + 0.3 * title_sim + 0.2 * brand_score, 3)
+    relation, differences = "none", []
+    if status == "verified":
+        relation = "exact"
+    else:
+        same_kind = not (source.types and cand.types and not (source.types & cand.types)) and not (
+            source.category != "general" and cand.category != "general" and source.category != cand.category)
+        related = brand_score >= 0.5 and same_kind and (coverage >= 0.34 or title_sim >= 0.45)
+        if blocked is None and (status == "candidate" or related):
+            relation = "similar"
+            if source.variants != cand.variants:
+                differences.append(_variant_note(source, cand))
+            differences.extend(_spec_notes(source, cand))
+            if source.bare_numbers and cand.bare_numbers and not (source.bare_numbers & cand.bare_numbers):
+                differences.append(f"model {', '.join(sorted(cand.bare_numbers))} instead of {', '.join(sorted(source.bare_numbers))}")
+            if source.model_codes and model_score == 0:
+                differences.append("different model code" + (f" ({'/'.join(sorted(cand.model_codes))})" if cand.model_codes else ""))
+            if numeric_note:
+                differences.append(f"model {numeric_note}")
+            if name_extras:
+                differences.append("a different product in the same range (" + ", ".join(name_extras) + ")")
+            elif edition_conflict:
+                differences.append(edition_conflict)
+            if any(f.startswith(("GTIN/EAN differs", "model/MPN differs")) for f in flags):
+                differences.append("different manufacturer part number")
+            if visual_different:
+                differences.append("the photo looks different")
+            if condition_conflict:
+                differences.append("other condition grade")
+            if not differences and status == "rejected":
+                if extras_all:
+                    differences.append("another model name (" + ", ".join(extras_all[:3]) + ")")
+                elif numeric_extras and source.bare_numbers:
+                    differences.append(f"model {', '.join(numeric_extras[:2])} instead of {', '.join(sorted(source.bare_numbers))}")
+            if not differences:
+                differences.append(UNCONFIRMED_NOTE if status == "candidate" else "a different product name")
+    return MatchResult(score=score, status=status, reasons=reasons, flags=flags, title_similarity=shown, condition=cand.condition,
+                       relation=relation, differences=differences, closeness=closeness)

@@ -5,6 +5,7 @@ let activeAnalysisId = null;
 let activeRangeDays = 180;
 let lastClickedPointKey = null;
 let activeCandidateFilter = 'all';
+let activeCandidateTab = null;          // 'exact' | 'similar' | null = whichever has results
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -117,6 +118,7 @@ $('#run').onclick = async () => {
 
     currentData = d;
     activeAnalysisId = d.analysis_id;
+    activeCandidateTab = null;          // a new analysis opens on whichever tab has results
     render(d);
     if (d.enrichment_status === 'pending') {
       $('#status').textContent = 'Live price is ready. Fetching reviews and comparable products…';
@@ -159,24 +161,45 @@ function pollEnrichment(analysisId) {
     } catch (_) {
       if (activeAnalysisId === analysisId) pollEnrichment(analysisId);
     }
-  }, 1800);
+  }, 1200);
 }
 
 function renderCandidateItems(candidates, currency) {
   if (!candidates || !candidates.length) return `<div class="empty">No comparable product candidates were collected from alternative stores.</div>`;
 
-  const imgMatches = candidates.filter(x => (x.image_similarity || 0) >= 0.50 || Boolean(x.image_url));
-  const textMatches = candidates.filter(x => (x.title_similarity || 0) >= 0.25);
-  const multiMatches = candidates.filter(x => (x.title_similarity || 0) >= 0.25 && ((x.image_similarity || 0) >= 0.50 || Boolean(x.image_url)));
+  // Exact = verified to be the very same product. Similar = same make and kind of product that differs somewhere
+  // (Pro / Pro+, another storage size, the next model number ...): shown apart, each card says what is different.
+  const relationOf = x => x.relation || (x.status === 'verified' ? 'exact' : 'similar');
+  const exactList = candidates.filter(x => relationOf(x) === 'exact');
+  const similarList = candidates.filter(x => relationOf(x) === 'similar');
+  const tab = (activeCandidateTab === 'similar' || (activeCandidateTab === null && !exactList.length)) ? 'similar' : 'exact';
+  const pool = tab === 'exact' ? exactList : similarList;
 
-  let filtered = candidates;
+  const imgMatches = pool.filter(x => (x.image_similarity || 0) >= 0.50 || Boolean(x.image_url));
+  const textMatches = pool.filter(x => (x.title_similarity || 0) >= 0.25);
+  const multiMatches = pool.filter(x => (x.title_similarity || 0) >= 0.25 && ((x.image_similarity || 0) >= 0.50 || Boolean(x.image_url)));
+
+  let filtered = pool;
   if (activeCandidateFilter === 'img') filtered = imgMatches;
   else if (activeCandidateFilter === 'text') filtered = textMatches;
   else if (activeCandidateFilter === 'multi') filtered = multiMatches;
 
-  const filterBar = `
+  const tabBar = `
+    <div class="candidate-tabs">
+      <button class="btn-range ${tab==='exact'?'active':''}" onclick="setCandidateTab('exact')">✅ Exact product (${exactList.length})</button>
+      <button class="btn-range ${tab==='similar'?'active':''}" onclick="setCandidateTab('similar')">🔀 Similar products (${similarList.length})</button>
+    </div>
+    <p class="tab-hint">${tab === 'exact'
+      ? 'Verified to be the same product. Only these count towards the lowest price.'
+      : 'Same brand and kind of product, but not identical. Each card says what is different. These prices are never used as the lowest price.'}</p>`;
+  const emptyTab = !pool.length
+    ? `<div class="empty">${tab === 'exact'
+        ? 'No exact match has been confirmed yet.' + (similarList.length ? ' See Similar products.' : '')
+        : 'No similar products found.'}</div>` : '';
+
+  const filterBar = !pool.length ? '' : `
     <div class="candidate-filter-bar" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-      <button class="btn-range ${activeCandidateFilter==='all'?'active':''}" onclick="setCandidateFilter('all')">All Matches (${candidates.length})</button>
+      <button class="btn-range ${activeCandidateFilter==='all'?'active':''}" onclick="setCandidateFilter('all')">All Matches (${pool.length})</button>
       <button class="btn-range ${activeCandidateFilter==='img'?'active':''}" onclick="setCandidateFilter('img')">📷 Visual Image Matches (${imgMatches.length})</button>
       <button class="btn-range ${activeCandidateFilter==='text'?'active':''}" onclick="setCandidateFilter('text')">🔤 Title Matches (${textMatches.length})</button>
       <button class="btn-range ${activeCandidateFilter==='multi'?'active':''}" onclick="setCandidateFilter('multi')">⚡ Multi-Modal Both (${multiMatches.length})</button>
@@ -198,20 +221,32 @@ function renderCandidateItems(candidates, currency) {
       <div class="item">
         ${imgThumb}
         <strong>${esc(x.platform)}</strong>
-        <span class="tag ${x.status === 'verified' ? 'tag-verified' : 'tag-candidate'}">${x.status === 'verified' ? 'VERIFIED' : 'POSSIBLE · not verified'}</span>
+        ${relationTag(x)}${linkTag(x)}
         ${lowestTag(x)}${stockTag(x)}
         ${ratingBadge}
         ${imgSimBadge}
         <p style="margin-top:6px;font-weight:600;color:#f1f5f9;">${esc(x.title)}</p>
         <p style="margin:4px 0;color:#7ff0d1;font-weight:bold;">Price: ${formatPrice(x.price, currency)} · <span style="color:#9da5bb;font-weight:normal;">${textSimBadge}</span></p>
         ${matchEvidence(x)}
-        <a href="${esc(safeUrl(x.url))}" target="_blank" rel="noreferrer">Open direct product page ↗</a>
+        <a href="${esc(safeUrl(x.url))}" target="_blank" rel="noreferrer">Open product page ↗</a>
       </div>
     `;
   }).join('');
 
-  return filterBar + itemsHtml;
+  return tabBar + emptyTab + filterBar + itemsHtml;
 }
+
+const relationTag = x => {
+  if ((x.relation || (x.status === 'verified' ? 'exact' : 'similar')) === 'exact') return '<span class="tag tag-verified">✅ EXACT</span>';
+  const unconfirmed = (x.differences || []).length === 1 && /could not confirm/i.test(x.differences[0]);
+  return unconfirmed
+    ? '<span class="tag tag-candidate">POSSIBLE · not confirmed</span>'          // may well be the same product; the evidence is not enough
+    : '<span class="tag tag-similar">SIMILAR · not identical</span>';
+};
+const linkTag = x => x.link_status === 'ok'
+  ? `<span class="tag tag-link-ok" title="${esc(x.link_note || 'The page opened and shows this product')}">🔗 link checked</span>`
+  : (x.link_status === 'unchecked'
+      ? `<span class="tag tag-link-unchecked" title="${esc(x.link_note || 'The store did not allow an automated check')}">🔗 not pre-checked</span>` : '');
 
 const isOutOfStock = x => (x.match_flags || []).some(f => /out of stock/i.test(f));
 const lowestUrl = () => (currentData && currentData.price_comparison && currentData.price_comparison.lowest) ? currentData.price_comparison.lowest.url : null;
@@ -219,6 +254,12 @@ const lowestTag = x => (lowestUrl() && x.url === lowestUrl() ? '<span class="tag
 const stockTag = x => (isOutOfStock(x) ? '<span class="tag tag-high">OUT OF STOCK · not counted</span>' : '');
 
 function matchEvidence(x) {
+  if ((x.relation || '') === 'similar') {
+    const diffs = (x.differences || []).map(esc).join(' · ');
+    const unconfirmed = (x.differences || []).length === 1 && /could not confirm/i.test(x.differences[0]);
+    const near = (x.closeness != null && !unconfirmed) ? `${Math.round(x.closeness * 100)}% similar` : '';
+    return `<p class="differs">↔ <b>What is different:</b> ${diffs || 'could not confirm it is identical'}${near ? ` <span class="near">· ${near}</span>` : ''}</p>`;
+  }
   if (x.match_source !== 'enhanced') {
     return x.reason ? `<p style="margin:4px 0;font-size:0.78rem;color:#9da5bb;">${esc(x.reason)}</p>` : '';
   }
@@ -227,6 +268,14 @@ function matchEvidence(x) {
   const flags = (x.match_flags || []).map(esc).join(' · ');
   return `<p style="margin:4px 0;font-size:0.78rem;color:#9da5bb;">${pct}${reasons ? ' — ' + reasons : ''}${flags ? `<br><span style="color:#ffb86b;">⚠ ${flags}</span>` : ''}</p>`;
 }
+
+window.setCandidateTab = (tab) => {
+  activeCandidateTab = tab;
+  activeCandidateFilter = 'all';
+  if (currentData) {
+    $('#candidates').innerHTML = renderCandidateItems(currentData.candidates, currentData.source.currency);
+  }
+};
 
 window.setCandidateFilter = (mode) => {
   activeCandidateFilter = mode;
@@ -317,27 +366,29 @@ function render(d) {
 
   renderPriceGraph(d);
 
-  // Keep the fetch animation visible until the background cross-store job completes.
-  if (d.enrichment_status === 'pending') {
+  // Stores answer one after another: show each match as soon as it arrives, and keep the search animation
+  // only until the first one does.
+  if (d.enrichment_status === 'pending' && !(d.candidates && d.candidates.length)) {
     renderCandidateSkeleton();
   } else {
-    $('#candidates').innerHTML = renderCandidateItems(d.candidates, d.source.currency);
+    const still = d.enrichment_status === 'pending'
+      ? '<div class="empty" style="margin-bottom:10px;">⏳ Still searching the remaining stores — more matches will appear here.</div>' : '';
+    $('#candidates').innerHTML = still + renderCandidateItems(d.candidates, d.source.currency);
   }
 
   // Findings
   if (d.findings && d.findings.length) {
     $('#findings').innerHTML = reviewSummaryHtml(d) + d.findings.map((x, idx) => {
-      const suspicious = x.classification === 'suspicious';
-      const genuineLooking = x.classification === 'genuine-looking';
+      const suspicious = x.verdict === 'not_genuine';
       const badgeTag = suspicious
-        ? '<span class="tag tag-high">⚠️ SUSPICIOUS SIGNALS</span>'
-        : genuineLooking
-          ? '<span class="tag tag-verified">✓ GENUINE-LOOKING</span>'
-          : '<span class="tag">REQUIRES REVIEW</span>';
+        ? '<span class="tag tag-high">✗ NOT GENUINE</span>'
+        : '<span class="tag tag-verified">✓ GENUINE</span>';
+      const certainty = x.verdict_certainty === 'limited'
+        ? `<span class="tag-note">${esc(x.verdict_note || 'limited evidence')}</span>` : '';
       
       const hasReason = x.signals && x.signals.length;
       const reasonHtml = hasReason ? `<div class="reason-box" style="border-color:${suspicious ? 'rgba(255,107,107,.4)' : 'rgba(127,240,209,.3)'}">
-        ${suspicious ? '⚠️ <b>Observed suspicious signals:</b> ' : 'ℹ️ <b>Review-text evidence:</b> '}${x.signals.map(esc).join(' | ')}
+        ${suspicious ? '⚠️ <b>Why not genuine:</b> ' : 'ℹ️ <b>Evidence:</b> '}${x.signals.map(esc).join(' | ')}
       </div>` : '';
       
       const transBtn = x.translation ? `<button class="btn-translate" onclick="toggleTranslation(${idx})">🌐 Translate to English</button>` : '';
@@ -346,7 +397,7 @@ function render(d) {
       return `
         <div class="item">
           <strong id="rev-text-${idx}">${x.rating ? x.rating + '★ ' : ''}"${esc(x.text)}"</strong>
-          <p>Review-text sentiment ${x.sentiment ?? '—'} ${badgeTag} · ${Math.round((x.classification_confidence || 0) * 100)}% evidence confidence${x.ml_fake_probability != null ? ` · text model: ${Math.round(x.ml_fake_probability * 100)}% generated-style` : ''}</p>
+          <p class="verdict-line">${badgeTag}${certainty}<span class="tag-note">${x.ml_fake_probability != null ? `AI-style ${Math.round(x.ml_fake_probability * 100)}%` : ''}</span></p>
           ${transBtn}
           ${transBox}
           ${reasonHtml}
@@ -385,9 +436,9 @@ function reviewSummaryHtml(d) {
     ? `<br>⚠ Review burst: ${burst.burst_points.map(p => `${esc(p.date)} (${p.count} reviews, z=${p.z_score})`).join('; ')}`
     : '';
   return `<div class="item" style="border-color:rgba(127,240,209,.35);">
-    <strong>${a.total_reviews} reviews analysed · ${a.suspicious} suspicious (${pct(a.suspicious_share)}) · ${a.genuine_looking} genuine-looking · ${a.needs_review} need review</strong>
+    <strong>${a.total_reviews} reviews · <span style="color:#7ff0d1">${a.genuine} genuine</span> · <span style="color:#ff6b6b">${a.not_genuine} not genuine</span> (${pct(a.total_reviews ? a.not_genuine / a.total_reviews : null)})</strong>
     <p style="font-size:0.78rem;color:#9da5bb;margin-top:6px;">${model}${burstLine}</p>
-    <p id="labelStatus" class="label-status">Press Real or Fake under a review to teach the model.</p>
+    <p id="labelStatus" class="label-status">Disagree with a verdict? Use the small ✓ / ✗ under a review to correct it.</p>
   </div>`;
 }
 
@@ -399,9 +450,8 @@ function labelButtons(x) {
   if (!x.review_hash) return '';
   const mine = currentLabel(x);
   const button = (value, text) =>
-    `<button class="btn-range ${mine === value ? 'active' : ''}" data-hash="${esc(x.review_hash)}" onclick="labelReview(this, '${value}')">${text}</button>`;
-  return `<div class="label-row">Your verdict: ${button('real', '✓ Real')} ${button('fake', '✗ Fake')}
-    <span class="label-msg">${mine ? 'Saved — used as training data' : 'Not labelled'}</span></div>`;
+    `<button class="btn-range ${mine === value ? 'active' : ''}" data-hash="${esc(x.review_hash)}" title="${value === 'real' ? 'Mark genuine' : 'Mark not genuine'}" onclick="labelReview(this, '${value}')">${text}</button>`;
+  return `<div class="label-row"><span>your call</span>${button('real', '✓')}${button('fake', '✗')}${mine ? '<span class="label-msg">saved</span>' : ''}</div>`;
 }
 
 async function labelReview(btn, value) {
@@ -433,7 +483,7 @@ function showLabelStatus(s) {
   const el = $('#labelStatus');
   if (!el || !s) return;
   const l = s.labels || { total: 0, real: 0, fake: 0 };
-  let text = `You have labelled ${l.total} review(s) (${l.real} real, ${l.fake} fake). `;
+  let text = `You have corrected ${l.total} review(s) (${l.real} genuine, ${l.fake} not genuine). `;
   if (s.running) {
     text += 'The model is retraining in the background…';
   } else if (!s.can_train) {

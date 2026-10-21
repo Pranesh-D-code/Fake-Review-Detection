@@ -199,13 +199,9 @@ def _enough_labels(counts: dict[str, int]) -> bool:
 
 def _spawn_trainer() -> int:
     """Run scripts/auto_retrain.py to completion (blocking); returns its exit code."""
+    from .proc import hidden_kwargs
     kwargs: dict[str, Any] = {"cwd": str(BASE_DIR), "capture_output": True, "encoding": "utf-8", "errors": "replace"}
-    if sys.platform == "win32":
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 0
-        kwargs["startupinfo"] = startup
-        kwargs["creationflags"] = 0x08000000              # CREATE_NO_WINDOW
+    kwargs.update(hidden_kwargs())
     proc = subprocess.run([sys.executable, str(BASE_DIR / "scripts" / "auto_retrain.py")], **kwargs)
     return proc.returncode
 

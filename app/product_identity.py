@@ -52,6 +52,23 @@ GENERIC_NAME_WORDS = {
     "sport", "casual", "formal", "smart", "wireless", "bluetooth", "digital", "adult", "liquid", "matte", "shoes",
     "shoe", "sneakers", "watch", "phone", "laptop", "tv", "led", "ac", "split", "inverter", "star", "model", "series",
     "edition", "color", "colour", "size", "regular", "fit", "slim", "cotton", "printed", "solid",
+    "laptop", "notebook", "chip", "inch", "gen", "core", "intel", "amd", "ryzen", "processor", "smartphone", "mobile",
+    "television", "speaker", "headphones", "earbuds", "wireless", "bluetooth", "smart", "iodised", "refined", "pure",
+    "vacuum", "evaporated", "premium", "original", "natural", "fresh", "classic", "advanced", "professional",
+    "jar", "pouch", "pack", "bottle", "can", "box", "tin", "sachet", "packet", "refill", "bag", "tube", "carton", "tub",
+}
+
+# Brands that mean "this listing is a different make" when one appears and the source's brand does not.
+BRAND_ALIASES = [{"redmi", "xiaomi", "mi", "poco"}, {"hp", "hewlett"}, {"maybelline", "maybelline new york"}, {"tata", "tatasalt"},
+                 {"levis", "levi's", "levi"}, {"loreal", "l'oreal"}, {"boat", "boat-lifestyle"}]
+KNOWN_BRANDS = {
+    "hp", "dell", "lenovo", "asus", "acer", "apple", "microsoft", "msi", "samsung", "lg", "sony", "oneplus", "realme", "xiaomi", "redmi",
+    "poco", "nothing", "motorola", "google", "vivo", "oppo", "iqoo", "tecno", "infinix", "nokia", "jbl", "boat", "noise", "bose",
+    "sennheiser", "philips", "panasonic", "whirlpool", "godrej", "bosch", "ifb", "voltas", "hitachi", "carrier", "daikin", "haier",
+    "tcl", "hisense", "canon", "nikon", "gopro", "fossil", "titan", "casio", "fastrack", "adidas", "nike", "puma", "reebok",
+    "skechers", "asics", "woodland", "bata", "levis", "wrangler", "maybelline", "lakme", "loreal", "nivea", "dove", "garnier",
+    "pampers", "huggies", "prestige", "bajaj", "havells", "usha", "pigeon", "kent", "eureka", "dyson", "wildcraft", "skybags",
+    "tourister", "safari", "fila", "campus", "zara", "mamaearth", "himalaya", "lotus", "cetaphil", "neutrogena", "ponds", "vaseline",
 }
 
 # coarse product types, used only when both sides expose one
@@ -87,6 +104,9 @@ CATEGORY_KEYWORDS = {
     "fashion": {"shoes", "sneakers", "sneaker", "sandals", "sandal", "slides", "flip-flops", "boots", "sports-shoes", "tee", "tshirts", "tshirt", "t-shirt", "shirt", "jeans", "kurta", "saree", "dress", "jacket",
                 "trousers", "hoodie", "sweatshirt", "leggings", "slippers", "loafers", "polo", "shorts", "track", "lehenga"},
     "bags": {"backpack", "trolley", "luggage", "duffel", "rucksack", "handbag", "wallet", "suitcase"},
+    "home": {"sofa", "couch", "table", "chair", "bed", "mattress", "wardrobe", "shelf", "bookshelf", "desk", "cupboard", "curtain",
+             "bedsheet", "pillow", "lamp", "stool", "cabinet", "recliner", "dresser", "rack", "nightstand", "ottoman"},
+    "health": {"protein", "whey", "creatine", "vitamin", "supplement", "multivitamin", "omega", "bcaa", "gainer", "collagen"},
     "grocery": {"chips", "biscuit", "chocolate", "tea", "coffee", "noodles", "atta", "rice", "dal", "oil", "ghee", "masala",
                 "snack", "cereal", "juice", "sauce", "spice", "salt", "sugar", "milk", "curd", "pasta", "oats"},
 }
@@ -133,7 +153,7 @@ _UNIT_NORMALISE = {
     "count": "pcs", "ct": "pcs", "star": "star", "stars": "star",
 }
 # units whose mismatch means "a different SKU" rather than marketing wording
-STRONG_UNITS = {"ram_gb", "storage_gb", "g", "ml", "ton", "pcs", "star"}   # "inch" is added for TVs/laptops by the matcher
+STRONG_UNITS = {"ram_gb", "storage_gb", "g", "ml", "ton", "pcs", "star", "spf"}   # "inch" is added for TVs/laptops by the matcher
 
 _SPEC = re.compile(
     r"(?<![a-z0-9.])(\d+(?:\.\d+)?)\s*(gb|tb|kgs?|gms?|grams?|g|ml|ltrs?|litres?|liters?|l|inch(?:es)?|cm|mm|"
@@ -164,6 +184,7 @@ class ProductIdentity:
 
 def normalise(text: str | None) -> str:
     text = (text or "").lower().replace("’", "'").replace("&", " and ")
+    text = re.sub(r"\b(pro|max|ultra|mini|lite|fe|se|air)\+", r"\1 plus", text)       # "Pro+" is a different model from "Pro"
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -251,6 +272,8 @@ def extract_specs(text: str) -> dict[str, set[float]]:
             unit, value = "inch", round(value / 25.4, 1)
         specs.setdefault(unit, set()).add(round(value, 2))
     specs.update(_memory_specs(lowered, memory))
+    for match in re.finditer(r"\bspf\s*(\d{1,3})\b", lowered):                 # sun protection factor: SPF 50 is not SPF 30
+        specs.setdefault("spf", set()).add(float(match.group(1)))
     for match in _PACK.finditer(lowered):
         number = next((g for g in match.groups() if g), None)
         if number and 1 < int(number) <= 100:
@@ -277,6 +300,8 @@ def _variants(head: list[str]) -> set[str]:
             continue
         if word == "air" and index + 1 < len(head) and head[index + 1] in {"condition", "conditioner", "conditioning", "purifier", "fryer", "cooler", "fresh"}:
             continue
+        if word == "ultra" and index + 1 < len(head) and head[index + 1] in {"hd", "wide", "slim", "thin", "soft", "light", "fast", "boost"}:
+            continue                                   # "4K Ultra HD", "ultra slim": descriptions, not the Ultra model
         out.add(word)
     return out
 

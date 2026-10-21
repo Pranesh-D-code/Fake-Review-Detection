@@ -119,6 +119,22 @@ class ReviewIntegrityClassifier:
 FAST_DUPLICATE_THRESHOLD = 150   # above this many reviews the pairwise SequenceMatcher scan is too slow
 
 
+def review_verdict(classification: str, confidence: float, ml_probability: float | None) -> tuple[str, str, str | None]:
+    """Two-way answer for the user: ("genuine" | "not_genuine", "clear" | "limited", note).
+
+    Clear signals decide outright. When the evidence is thin or mixed ("needs-review") the review is placed on the
+    side the text model leans to, marked "limited"; a review too short for the model with no warning sign is
+    called genuine, and says so.
+    """
+    if classification == "suspicious":
+        return "not_genuine", ("clear" if confidence >= 0.7 else "limited"), None
+    if classification == "genuine-looking":
+        return "genuine", ("clear" if confidence >= 0.8 else "limited"), None
+    if ml_probability is not None:
+        return ("not_genuine" if ml_probability >= 0.5 else "genuine"), "limited", "close call"
+    return "genuine", "limited", "too short to judge"
+
+
 def _near_duplicate_indices(reviews: list[Review]) -> set[int]:
     """Identify similar text inside only the reviews returned for this run."""
     duplicates: set[int] = set()
@@ -198,6 +214,7 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
                 spam_count += 1
             # Every collected review is shown. Genuine reviews must not disappear
             # simply because they have no suspicious signal.
+            verdict, certainty, verdict_note = review_verdict(classification, classification_confidence, ml_probability)
             findings.append(Finding(
                 text=r.text,
                 rating=r.rating,
@@ -211,6 +228,7 @@ def compute_trust_score(product: Product, reviews: list[Review] | None = None) -
                 ml_fake_probability=ml_probability,
                 detector=detector,
                 review_hash=review_hash(r.text),
+                verdict=verdict, verdict_certainty=certainty, verdict_note=verdict_note,
             ))
 
     has_title = bool(product.title and product.title.strip())

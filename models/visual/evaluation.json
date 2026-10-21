@@ -1,0 +1,62 @@
+{
+  "pairs": 1100,
+  "same": 67,
+  "different": 1033,
+  "hard_negatives": 735,
+  "methods": {
+    "legacy": {
+      "auc": 0.591,
+      "auc_vs_hard_negatives": 0.58,
+      "best_accuracy": 0.9445,
+      "at_threshold": 0.8125
+    },
+    "phash_trim": {
+      "auc": 0.6474,
+      "auc_vs_hard_negatives": 0.6361,
+      "best_accuracy": 0.9518,
+      "at_threshold": 0.8281
+    },
+    "colour": {
+      "auc": 0.693,
+      "auc_vs_hard_negatives": 0.6898,
+      "best_accuracy": 0.9427,
+      "at_threshold": 0.9515
+    },
+    "dino_cls": {
+      "auc": 0.8259,
+      "auc_vs_hard_negatives": 0.7915,
+      "best_accuracy": 0.9582,
+      "at_threshold": 0.9217
+    },
+    "dino_mean": {
+      "auc": 0.843,
+      "auc_vs_hard_negatives": 0.8049,
+      "best_accuracy": 0.9518,
+      "at_threshold": 0.972
+    },
+    "dino_concat": {
+      "auc": 0.8362,
+      "auc_vs_hard_negatives": 0.8002,
+      "best_accuracy": 0.9545,
+      "at_threshold": 0.9396
+    },
+    "combined_oof": {
+      "auc": 0.7444,
+      "auc_vs_hard_negatives": 0.7068,
+      "best_accuracy": 0.9427,
+      "at_threshold": 0.9041
+    }
+  },
+  "chosen": "dino cosine",
+  "same_at": 0.8106,
+  "different_below": 0.0528,
+  "at_those_thresholds": {
+    "same_pairs_called_same": 0.3433,
+    "different_pairs_called_same": 0.03,
+    "same_pairs_called_different": 0.0597,
+    "different_pairs_called_different": 0.2275,
+    "look_alike_pairs_called_same": 0.0422,
+    "look_alike_pairs_called_different": 0.1469
+  },
+  "note": "Labels come from the text matcher (brand / model code / specs), not from a person. The two signals are independent, so agreement is evidence both are right, but this is not hand-checked ground truth."
+}

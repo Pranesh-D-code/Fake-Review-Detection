@@ -33,6 +33,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from .proc import hidden_kwargs
 from .store_registry import looks_like_product_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -439,7 +440,12 @@ def page_problem(html: str, status: int | None) -> tuple[str, str] | None:
 # --------------------------------------------------------------------------- fetching
 
 def fetch_html(url: str, timeout: float = 12.0) -> tuple[int | None, str, str]:
-    """Plain HTTP GET like an ordinary browser visit: (status, html, final_url)."""
+    """Plain HTTP GET like an ordinary browser visit: (status, html, final_url). Shared with other readers of the same page."""
+    from .http_cache import fetch_once
+    return fetch_once(("page", url), lambda: _fetch_html_uncached(url, timeout))
+
+
+def _fetch_html_uncached(url: str, timeout: float = 12.0) -> tuple[int | None, str, str]:
     import httpx
 
     try:
@@ -458,12 +464,7 @@ def fetch_html(url: str, timeout: float = 12.0) -> tuple[int | None, str, str]:
 def render_html(url: str, timeout: int = 50) -> tuple[int | None, str, str]:
     """Render once in headless Chrome and return the final DOM: (status, html, final_url)."""
     kwargs = {"capture_output": True, "encoding": "utf-8", "errors": "replace", "timeout": timeout, "cwd": str(BASE_DIR)}
-    if sys.platform == "win32":
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 0
-        kwargs["startupinfo"] = startup
-        kwargs["creationflags"] = 0x08000000
+    kwargs.update(hidden_kwargs())
     try:
         proc = subprocess.run(["node", "scraper_search.js", "page", json.dumps({"url": url})], **kwargs)
     except subprocess.TimeoutExpired:

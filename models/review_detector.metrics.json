@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-10-15T17:55:40.617595+00:00",
+  "created_at": "2026-10-20T10:17:45.838744+00:00",
   "sklearn_version": "1.9.1",
   "dataset": "archive.zip",
   "label_mapping": {
@@ -8,166 +8,229 @@
   },
   "positive_class": "computer-generated-fake",
   "rows": {
-    "total": 40486,
-    "train": 28340,
-    "validation": 6073,
-    "test": 6073
+    "total": 85486,
+    "train": 59840,
+    "validation": 12823,
+    "test": 12823,
+    "live": 0
   },
+  "extra_datasets": [
+    {
+      "name": "modern-fake-reviews-deepseek",
+      "license": "CC BY 4.0",
+      "source_url": "https://huggingface.co/datasets/Flowerly/modern-fake-reviews",
+      "rows_used": 15000,
+      "fake": 14264,
+      "real": 736
+    },
+    {
+      "name": "modern-fake-reviews-glm",
+      "license": "CC BY 4.0",
+      "source_url": "https://huggingface.co/datasets/Flowerly/modern-fake-reviews-glm",
+      "rows_used": 15000,
+      "fake": 14781,
+      "real": 219
+    },
+    {
+      "name": "modern-fake-reviews-lfm",
+      "license": "CC BY 4.0",
+      "source_url": "https://huggingface.co/datasets/Flowerly/modern-fake-reviews-lfm",
+      "rows_used": 15000,
+      "fake": 14931,
+      "real": 69
+    }
+  ],
+  "live_labels_total": 0,
+  "live_labels_in_training": 0,
+  "live_weight": null,
   "model": "TF-IDF(word 1-2 + char_wb 3-5) + LogisticRegression(C=32.0)",
-  "min_words_for_ml": 11,
+  "min_words_for_ml": 10,
   "thresholds": {
-    "suspicious_at": 0.83,
-    "genuine_below": 0.12
+    "suspicious_at": 0.8355,
+    "genuine_below": 0.045
   },
   "seed": 42,
-  "caveat": "Trained to separate original from computer-generated reviews in one labelled English dataset. Output is a text-style likelihood, not proof that a review is fake, and it has not been validated on live marketplace reviews.",
+  "caveat": "Trained to separate original from computer-generated reviews in one labelled English dataset plus fakes written by present-day LLMs (modern-fake-reviews-deepseek, modern-fake-reviews-glm, modern-fake-reviews-lfm). Output is a text-style likelihood, not proof that a review is fake, and it has not been validated on live marketplace reviews.",
   "metrics": {
     "test_at_0.5": {
       "threshold": 0.5,
-      "accuracy": 0.9504,
-      "precision_fake": 0.948,
-      "recall_fake": 0.9533,
-      "f1_fake": 0.9506,
+      "accuracy": 0.9544,
+      "precision_fake": 0.9768,
+      "recall_fake": 0.9621,
+      "f1_fake": 0.9694,
       "confusion": {
-        "tn": 2876,
-        "fp": 159,
-        "fn": 142,
-        "tp": 2896
+        "tn": 2969,
+        "fp": 220,
+        "fn": 365,
+        "tp": 9269
       },
-      "roc_auc": 0.9905,
-      "pr_auc": 0.9907,
-      "brier": 0.0366
+      "roc_auc": 0.9894,
+      "pr_auc": 0.9965,
+      "brier": 0.034
     },
     "test_at_suspicious_threshold": {
-      "threshold": 0.83,
-      "accuracy": 0.9373,
-      "precision_fake": 0.9815,
-      "recall_fake": 0.8914,
-      "f1_fake": 0.9343,
+      "threshold": 0.8355,
+      "accuracy": 0.9227,
+      "precision_fake": 0.9933,
+      "recall_fake": 0.9033,
+      "f1_fake": 0.9461,
       "confusion": {
-        "tn": 2984,
-        "fp": 51,
-        "fn": 330,
-        "tp": 2708
+        "tn": 3130,
+        "fp": 59,
+        "fn": 932,
+        "tp": 8702
       }
     },
     "validation_at_0.5": {
       "threshold": 0.5,
-      "accuracy": 0.944,
-      "precision_fake": 0.9455,
-      "recall_fake": 0.9424,
-      "f1_fake": 0.944,
+      "accuracy": 0.9544,
+      "precision_fake": 0.9779,
+      "recall_fake": 0.961,
+      "f1_fake": 0.9694,
       "confusion": {
-        "tn": 2869,
-        "fp": 165,
-        "fn": 175,
-        "tp": 2864
+        "tn": 2979,
+        "fp": 209,
+        "fn": 376,
+        "tp": 9259
       },
-      "roc_auc": 0.9883,
-      "pr_auc": 0.9893,
-      "brier": 0.0401
+      "roc_auc": 0.9893,
+      "pr_auc": 0.9964,
+      "brier": 0.034
     },
     "test_genuine_band": {
-      "share_of_rows": 0.4314,
-      "original_share_within_band": 0.9847
+      "share_of_rows": 0.1668,
+      "original_share_within_band": 0.986
     },
-    "test_uncertain_band_share": 0.1143,
+    "test_uncertain_band_share": 0.15,
+    "test_dataset_only": {
+      "threshold": 0.5,
+      "accuracy": 0.9246,
+      "precision_fake": 0.9276,
+      "recall_fake": 0.9215,
+      "f1_fake": 0.9245,
+      "confusion": {
+        "tn": 2808,
+        "fp": 219,
+        "fn": 239,
+        "tp": 2806
+      },
+      "roc_auc": 0.9786,
+      "pr_auc": 0.9799,
+      "brier": 0.0552
+    },
+    "live_test": {
+      "rows": 0,
+      "note": "too few person-labelled reviews in the test split to measure live accuracy"
+    },
     "rule_based_baseline_on_test": {
-      "accuracy": 0.4998,
+      "accuracy": 0.2487,
       "precision_fake": 0.0,
       "recall_fake": 0.0,
       "f1_fake": 0.0,
       "flagged_share": 0.0
     },
-    "leave_one_category_out": {
-      "Kindle_Store": {
-        "rows": 4727,
-        "threshold": 0.5,
-        "accuracy": 0.9338,
-        "precision_fake": 0.9388,
-        "recall_fake": 0.928,
-        "f1_fake": 0.9334,
-        "confusion": {
-          "tn": 2222,
-          "fp": 143,
-          "fn": 170,
-          "tp": 2192
-        },
-        "roc_auc": 0.9845,
-        "pr_auc": 0.9847,
-        "brier": 0.0486
+    "per_source_test": {
+      "dataset": {
+        "test_rows": 6072,
+        "fake_recall_at_flag_threshold": 0.8164,
+        "fake_recall_at_0.5": 0.9215,
+        "real_wrongly_flagged": 0.0192
       },
-      "Books": {
-        "rows": 4376,
-        "threshold": 0.5,
-        "accuracy": 0.9289,
-        "precision_fake": 0.9589,
-        "recall_fake": 0.8963,
-        "f1_fake": 0.9266,
-        "confusion": {
-          "tn": 2103,
-          "fp": 84,
-          "fn": 227,
-          "tp": 1962
-        },
-        "roc_auc": 0.9837,
-        "pr_auc": 0.984,
-        "brier": 0.0541
+      "modern-fake-reviews-deepseek": {
+        "test_rows": 2284,
+        "fake_recall_at_flag_threshold": 0.9408,
+        "fake_recall_at_0.5": 0.9783,
+        "real_wrongly_flagged": 0.0081
       },
-      "Pet_Supplies": {
-        "rows": 4250,
-        "threshold": 0.5,
-        "accuracy": 0.9099,
-        "precision_fake": 0.9683,
-        "recall_fake": 0.8475,
-        "f1_fake": 0.9038,
-        "confusion": {
-          "tn": 2067,
-          "fp": 59,
-          "fn": 324,
-          "tp": 1800
-        },
-        "roc_auc": 0.9808,
-        "pr_auc": 0.9821,
-        "brier": 0.0666
+      "modern-fake-reviews-glm": {
+        "test_rows": 2192,
+        "fake_recall_at_flag_threshold": 0.9197,
+        "fake_recall_at_0.5": 0.9718,
+        "real_wrongly_flagged": 0.0
+      },
+      "modern-fake-reviews-lfm": {
+        "test_rows": 2275,
+        "fake_recall_at_flag_threshold": 0.9686,
+        "fake_recall_at_0.5": 0.992,
+        "real_wrongly_flagged": 0.0
+      }
+    },
+    "generalisation_probes": {
+      "kaggle_only (trained without any modern generator)": {
+        "dataset": 0.9448,
+        "modern-fake-reviews-deepseek": 0.0143,
+        "modern-fake-reviews-glm": 0.012,
+        "modern-fake-reviews-lfm": 0.0155,
+        "real_wrongly_flagged_at_0.5": 0.0446
+      },
+      "never_saw_modern-fake-reviews-deepseek": {
+        "dataset": 0.9232,
+        "modern-fake-reviews-deepseek": 0.9449,
+        "modern-fake-reviews-glm": 0.9617,
+        "modern-fake-reviews-lfm": 0.9903,
+        "real_wrongly_flagged_at_0.5": 0.0687
+      },
+      "never_saw_modern-fake-reviews-glm": {
+        "dataset": 0.9317,
+        "modern-fake-reviews-deepseek": 0.9648,
+        "modern-fake-reviews-glm": 0.9012,
+        "modern-fake-reviews-lfm": 0.9903,
+        "real_wrongly_flagged_at_0.5": 0.0677
+      },
+      "never_saw_modern-fake-reviews-lfm": {
+        "dataset": 0.9287,
+        "modern-fake-reviews-deepseek": 0.9815,
+        "modern-fake-reviews-glm": 0.9714,
+        "modern-fake-reviews-lfm": 0.8687,
+        "real_wrongly_flagged_at_0.5": 0.0697
+      }
+    },
+    "leave_one_category_out": {},
+    "evaluation_only_sets": {
+      "gp-surgery-fake-and-real": {
+        "rows": 11976,
+        "license": "MIT",
+        "accuracy_at_0.5": 0.489,
+        "fake_recall_at_flag_threshold": 0.0036,
+        "real_wrongly_flagged": 0.0177
       }
     }
   },
   "top_terms": {
     "toward_original": [
-      "at",
-      "it",
       "to",
-      "on",
-      "loved the",
-      "no",
-      "though",
-      "all",
-      "but",
+      "and",
+      "it",
+      "as",
+      "of",
+      "have",
+      "well worth",
+      "was",
+      "very",
+      "is",
+      "after the",
+      "good",
       "so",
-      "so was",
-      "great and",
-      "this",
-      "buy again",
-      "quality am"
+      "in",
+      "and are"
     ],
     "toward_computer_generated": [
+      "and the",
       "the only",
       "will keep",
-      "and the",
       "and it",
+      "very good",
       "has the",
+      "and they",
+      "had to",
+      "is very",
       "but it",
-      "that it",
-      "is little",
       "have one",
-      "is bit",
-      "not sure",
-      "we love",
-      "keep my",
-      "only reason",
-      "had to"
+      "if you",
+      "that it",
+      "have large",
+      "had lot"
     ]
   },
-  "training_seconds": 401.9
+  "training_seconds": 628.2
 }

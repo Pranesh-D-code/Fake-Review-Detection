@@ -8,20 +8,24 @@ Integration Architecture:
 """
 from __future__ import annotations
 
-import hashlib, json, math, os, re, sqlite3, statistics, subprocess, sys
+import hashlib, json, math, os, re, sqlite3, statistics, subprocess, sys, time
+from contextvars import ContextVar
+from typing import Callable
 from datetime import datetime, timezone, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urlparse, quote_plus
 
 from .models import Candidate, Finding, PricePoint, PriceSummary, Product, Review, TrustScore, ReviewBurstSummary
-from .matcher import OUT_OF_STOCK_FLAG
+from .matcher import OUT_OF_STOCK_FLAG, UNCONFIRMED_NOTE
+from . import link_check
 from .nlp_engine import compute_trust_score
 from .image_matcher import compute_image_similarity
 from .review_scraper import collect_amazon_reviews, collect_apify_amazon_product
 from .review_signals import parse_review_date
 from .source_extractor import SourceReadError, extract_source_product, is_acceptable_source_url
 from .store_registry import canonical_store, same_store
+from .proc import hidden_kwargs
 
 DATA_PATH = Path("trustengine.db")
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -91,12 +95,7 @@ def run_puppeteer_scraper(url: str, mode: str = "extract") -> dict | None:
             "timeout": 55,
             "cwd": str(BASE_DIR)
         }
-        if sys.platform == "win32":
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 0  # SW_HIDE
-            kwargs["startupinfo"] = si
-            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        kwargs.update(hidden_kwargs())
 
         proc = subprocess.run(["node", "scraper.js", mode, url], **kwargs)
         if proc.returncode == 0 and proc.stdout.strip():
@@ -149,18 +148,97 @@ def merge_generic_source(p_data: dict, generic: dict, url: str) -> dict:
     return merged
 
 
+def parse_reviews(raw_reviews: list) -> list[Review]:
+    """Review dicts from any collector (text, rating, date / timestamp, verified_purchase) -> Review objects."""
+    reviews = []
+    for r in raw_reviews:
+        if isinstance(r, dict) and r.get("text"):
+            ts = None
+            review_rating = None
+            try:
+                parsed_rating = float(r.get("rating"))
+                if 1 <= parsed_rating <= 5 and parsed_rating.is_integer():
+                    review_rating = int(parsed_rating)
+            except (TypeError, ValueError):
+                pass
+            timestamp = r.get("timestamp") or r.get("date")
+            if timestamp:
+                try:
+                    ts = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                except Exception:
+                    # e.g. "Reviewed in India on 5 March 2024" from marketplace/provider text
+                    ts = parse_review_date(timestamp)
+            reviews.append(Review(
+                text=r["text"], rating=review_rating, timestamp=ts,
+                verified_purchase=bool(r.get("verified_purchase"))
+            ))
+    return reviews
+
+
 def _review_key(text: object) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().casefold()
 
 
-def _extended_search(p_data: dict, platform: str, url: str):
+def _extended_search(p_data: dict, platform: str, url: str, progress=None):
     """Run app/multistore.py for the product described by ``p_data`` (title, brand, price, image, identifiers)."""
     from .multistore import enhanced_competitor_matches
     source_currency = str(p_data.get("currency") or "INR").upper()
     price = p_data.get("price")
     return enhanced_competitor_matches(
         p_data.get("title"), p_data.get("brand"), price if source_currency == "INR" else None, p_data.get("image_url"),
-        platform, url, source_gtin=p_data.get("gtin"), source_mpn=p_data.get("mpn"))
+        platform, url, source_gtin=p_data.get("gtin"), source_mpn=p_data.get("mpn"), progress=progress)
+
+
+# ---- what the first (quick) pass learned about a link, reused by the background pass --------------------------
+_SNAPSHOT_TTL_SECONDS = 600
+_SNAPSHOTS: dict[str, tuple[float, dict]] = {}
+_progress_hook: ContextVar[Callable[[str, object], None] | None] = ContextVar("progress_hook", default=None)
+
+
+def set_progress_hook(hook: Callable[[str, object], None] | None):
+    """Let a caller hear about partial results ("matches", "reviews") while extract_product is still running."""
+    return _progress_hook.set(hook)
+
+
+def reset_progress_hook(token) -> None:
+    _progress_hook.reset(token)
+
+
+def _remember_snapshot(url: str, p_data: dict) -> None:
+    if p_data.get("title"):
+        _SNAPSHOTS[url] = (time.time(), dict(p_data))
+
+
+def _recent_snapshot(url: str) -> dict | None:
+    entry = _SNAPSHOTS.get(url)
+    if entry and time.time() - entry[0] < _SNAPSHOT_TTL_SECONDS:
+        return dict(entry[1])
+    return None
+
+
+def _asin_from_url(url: str) -> str:
+    match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url)
+    return match.group(1) if match else ""
+
+
+def _collect_store_reviews(url: str, mode: str):
+    """Reviews the store itself shows a logged-out visitor (app/review_collectors.py).
+
+    The quick first pass takes a small, fast sample; the background pass reads everything it can and may
+    fall back to a headless-Chrome scan for pages that draw their reviews with JavaScript.
+    """
+    from .review_collectors import collect_reviews, default_limit
+    quick = mode == "source"
+    return collect_reviews(url, limit=40 if quick else default_limit(), use_browser=not quick)
+
+
+def _notify(hook, kind: str, future) -> None:
+    try:
+        hook(kind, future.result())
+    except Exception:                                    # a progress message must never break the analysis
+        pass
 
 
 def extract_product(url: str, mode: str = "extract") -> tuple[Product, list[str]]:
@@ -169,53 +247,70 @@ def extract_product(url: str, mode: str = "extract") -> tuple[Product, list[str]
     if not is_valid_ecommerce_url(url) and not is_acceptable_source_url(url):
         raise ValueError("Invalid E-Commerce Link. Please paste a valid product listing URL from an e-commerce website (e.g., Amazon, Flipkart, Myntra, Nykaa, Meesho, etc.).")
 
+    host = urlparse(url).netloc.lower()
+    amazon = "amazon" in host
+    legacy = _is_legacy_source(url)                      # Amazon / Flipkart keep their original scraper.js path
+    quick = mode == "source"
+    hook = _progress_hook.get()
+    snapshot = None if quick else _recent_snapshot(url)  # the quick pass already read this link a moment ago
+
+    from concurrent.futures import ThreadPoolExecutor
+    pool = ThreadPoolExecutor(max_workers=6)
+    f_scrape = f_generic = f_reviews = f_prod = f_rev = early_search = None
     generic: dict | None = None
     generic_error: SourceReadError | None = None
-    if _is_legacy_source(url):
-        p_data = run_puppeteer_scraper(url, mode)
+    # 1. Start everything that needs only the link, all at once.
+    if amazon:
+        f_scrape = pool.submit(run_puppeteer_scraper, url, mode)
     else:
-        # Any other store: read the page's own product markup alongside scraper.js.
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            scrape_future = executor.submit(run_puppeteer_scraper, url, mode)
-            read_future = executor.submit(_read_generic_source, url)
-            p_data = scrape_future.result()
-            generic, generic_error = read_future.result()
+        if snapshot is None:
+            f_generic = pool.submit(_read_generic_source, url)                 # page's own product markup, plain HTTP first
+        if legacy and not quick:
+            f_scrape = pool.submit(run_puppeteer_scraper, url, mode)           # Flipkart's own Amazon search (legacy), unchanged
+        f_reviews = pool.submit(_collect_store_reviews, url, mode)
+        if hook is not None:
+            f_reviews.add_done_callback(lambda f: _notify(hook, "reviews", f))
+    if amazon and not quick:
+        f_prod = pool.submit(collect_apify_amazon_product, url)
+        f_rev = pool.submit(collect_amazon_reviews, url, _asin_from_url(url) or (_recent_snapshot(url) or {}).get("sku") or "")
+
+    # 2. The page itself.
+    if f_generic is not None:
+        generic, generic_error = f_generic.result()
+    elif snapshot is not None and not amazon:
+        generic = snapshot
+    p_data = f_scrape.result() if f_scrape is not None else None
+    if f_scrape is None and generic is None and not amazon:
+        p_data = run_puppeteer_scraper(url, mode)           # the page declared nothing readable: fall back to scraper.js
     p_data = p_data if isinstance(p_data, dict) and not p_data.get("error") else {}
     if generic:
         p_data = merge_generic_source(p_data, generic, url)
     elif generic_error is not None and (generic_error.reason in ("blocked", "login") or generic_error.reason.startswith("http_")
                                         or not (p_data.get("title") and p_data.get("price"))):
         # a wall or an HTTP error page: scraper.js's CSS guesses on it (an error page's <h1>) are not a product
+        pool.shutdown(wait=False, cancel_futures=True)
         raise generic_error
-    if p_data and not _is_legacy_source(url):
+    if p_data and not amazon:
         p_data["platform"] = canonical_store(p_data.get("platform"), url)      # "croma.com" -> "Croma"
     platform = p_data.get("platform") or platform_for(url)
+    if quick:
+        _remember_snapshot(url, p_data)
 
-    # The extended cross-store search (app/multistore.py) only needs the title, so when the page
-    # itself was read it starts now and runs while the slow review/product provider calls below
-    # wait on the network. If the page was blocked it waits for the provider's better title.
-    early_search = None
-    if mode != "source" and p_data.get("title") and p_data.get("price") is not None:
-        from concurrent.futures import ThreadPoolExecutor
-        early_pool = ThreadPoolExecutor(max_workers=1)
-        early_search = early_pool.submit(_extended_search, dict(p_data), platform, url)   # a snapshot: p_data is edited below
-        early_pool.shutdown(wait=False)
+    # 3. The cross-store search needs only the title: start it now, while the slow provider calls wait on the network.
+    if not quick and p_data.get("title"):
+        partial = (lambda matches, attempts, identity: hook("matches", (matches, attempts, identity))) if hook is not None else None
+        early_search = pool.submit(_extended_search, dict(p_data), platform, url, partial)   # a snapshot: p_data is edited below
+        if hook is not None:
+            early_search.add_done_callback(lambda f: _notify(hook, "matches", f))
 
-    # During the complete background pass, request the managed source for both
-    # product attributes and reviews.  Requests run in parallel to avoid adding
-    # an extra full round-trip to the user-visible wait.
+    # 4. During the complete background pass, the managed review/product source (Amazon).
     provider_product: dict = {}
     provider_product_notice = ""
     provider_reviews: list[dict] = []
     provider_reviews_notice = ""
-    if mode != "source" and platform == "Amazon":
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            product_future = executor.submit(collect_apify_amazon_product, url)
-            review_future = executor.submit(collect_amazon_reviews, url, p_data.get("sku") or "")
-            provider_product, provider_product_notice = product_future.result()
-            provider_reviews, provider_reviews_notice = review_future.result()
+    if f_prod is not None:
+        provider_product, provider_product_notice = f_prod.result()
+        provider_reviews, provider_reviews_notice = f_rev.result()
 
         # Provider fields win only when they are real values.  This lets the
         # app render metadata even if Amazon blocks the local page request.
@@ -226,6 +321,13 @@ def extract_product(url: str, mode: str = "extract") -> tuple[Product, list[str]
             p_data.setdefault("product_collection", {})["source"] = provider_product_notice
         elif provider_product_notice:
             p_data.setdefault("product_collection", {}).setdefault("issues", []).append(provider_product_notice)
+
+    collected_reviews = None
+    if f_reviews is not None:
+        try:
+            collected_reviews = f_reviews.result()
+        except Exception:
+            collected_reviews = None
 
     if p_data:
         platform = p_data.get("platform") or platform
@@ -251,30 +353,21 @@ def extract_product(url: str, mode: str = "extract") -> tuple[Product, list[str]
             if raw_reviews:
                 collection.setdefault("source", "the product page")
 
-        reviews = []
-        for r in raw_reviews:
-            if isinstance(r, dict) and r.get("text"):
-                ts = None
-                review_rating = None
-                try:
-                    parsed_rating = float(r.get("rating"))
-                    if 1 <= parsed_rating <= 5 and parsed_rating.is_integer():
-                        review_rating = int(parsed_rating)
-                except (TypeError, ValueError):
-                    pass
-                timestamp = r.get("timestamp") or r.get("date")
-                if timestamp:
-                    try:
-                        ts = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-                        if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=timezone.utc)
-                    except Exception:
-                        # e.g. "Reviewed in India on 5 March 2024" from marketplace/provider text
-                        ts = parse_review_date(timestamp)
-                reviews.append(Review(
-                    text=r["text"], rating=review_rating, timestamp=ts,
-                    verified_purchase=bool(r.get("verified_purchase"))
-                ))
+        # Reviews the store itself shows a logged-out visitor (Flipkart review pages, schema.org markup, a Chrome scan).
+        if collected_reviews is not None:
+            if collected_reviews.reviews:
+                known = {_review_key(r.get("text")) for r in raw_reviews if isinstance(r, dict)}
+                raw_reviews = list(raw_reviews) + [r for r in collected_reviews.reviews if _review_key(r["text"]) not in known]
+                collection = p_data.setdefault("review_collection", {})
+                existing = collection.get("fallback_source") or collection.get("source")
+                collection["source"] = (existing + " + " if existing else "") + collected_reviews.source
+                collection.pop("fallback_source", None) if not existing else None
+            else:
+                p_data.setdefault("review_collection", {}).setdefault("issues", []).extend(collected_reviews.issues[:1])
+            if collected_reviews.reported_total and not p_data.get("review_count"):
+                p_data["review_count"] = collected_reviews.reported_total
+
+        reviews = parse_reviews(raw_reviews)
 
         title = p_data.get("title")
         price = p_data.get("price")
@@ -340,6 +433,7 @@ def extract_product(url: str, mode: str = "extract") -> tuple[Product, list[str]
             extracted_fields=fields
         )
         prod._p_data = p_data
+        pool.shutdown(wait=False)
         return prod, notices
 
     raise RuntimeError("The product page could not be fetched. No fallback product or reviews were generated.")
@@ -415,6 +509,7 @@ def candidate_links(product: Product) -> tuple[list[Candidate], Candidate | None
             if pm.get('match_source') == 'enhanced':
                 reasons, flags = pm.get('match_reasons') or [], pm.get('match_flags') or []
                 verified = pm.get('match_status') == 'verified'
+                differences = [] if verified else (pm.get('differences') or [UNCONFIRMED_NOTE])
                 return Candidate(
                     platform=cand_platform, title=title_txt, url=cand_url,
                     price=pm.get('price'), rating=pm.get('rating'), review_count=pm.get('review_count'),
@@ -423,11 +518,16 @@ def candidate_links(product: Product) -> tuple[list[Candidate], Candidate | None
                     image_url=pm.get('image_url') or product.image_url,
                     status="verified" if verified else "candidate",
                     reason=("Attributes agree: " + "; ".join(reasons)) if verified
-                           else ("Possible match, not verified: " + "; ".join(flags or ["insufficient evidence"])),
+                           else ("Similar product, not identical: " + "; ".join(differences)),
                     match_source="enhanced", match_score=pm.get('match_score'),
                     match_reasons=reasons, match_flags=flags,
+                    relation="exact" if verified else "similar", differences=differences, closeness=pm.get('closeness'),
+                    link_status=pm.get('link_status'), link_note=pm.get('link_note'),
                 )
             score = similarity(product.title, title_txt)
+            link = link_check.check(cand_url, title_txt)
+            if link.state == "dead":
+                return None                                   # a link that does not open is never listed
 
             # Image Similarity computed concurrently
             img_sim = compute_image_similarity(product.image_url, pm.get('image_url'))
@@ -449,7 +549,12 @@ def candidate_links(product: Product) -> tuple[list[Candidate], Candidate | None
                 image_similarity=img_sim,
                 image_url=cand_img,
                 status=status,
-                reason=("Title and image similarity independently verified" if status == "verified" else "Live search candidate; more evidence is required before verification")
+                reason=("Title and image similarity independently verified" if status == "verified" else "Similar product, not identical: " + UNCONFIRMED_NOTE),
+                relation="exact" if status == "verified" else "similar",
+                differences=[] if status == "verified" else [UNCONFIRMED_NOTE],
+                closeness=score,
+                link_status=link.state if link.state in ("ok", "unchecked") and link_check.enabled() else None,
+                link_note=link.reason if link_check.enabled() else None,
             )
 
         from concurrent.futures import ThreadPoolExecutor
@@ -465,9 +570,16 @@ def candidate_links(product: Product) -> tuple[list[Candidate], Candidate | None
 
     distinct: list[Candidate] = []
     for item in unique.values():
-        duplicate_index = next((i for i, existing in enumerate(distinct)
-                                if existing.platform == item.platform
-                                and SequenceMatcher(None, existing.title.lower(), item.title.lower()).ratio() >= 0.82), None)
+        def same_listing(existing: Candidate) -> bool:
+            if existing.platform != item.platform or SequenceMatcher(None, existing.title.lower(), item.title.lower()).ratio() < 0.82:
+                return False
+            if existing.relation == item.relation:
+                return True
+            # exact next to a "similar" one: the same listing only when the similar one has no stated difference
+            similar = existing if existing.relation == "similar" else item
+            return similar.differences == [UNCONFIRMED_NOTE]
+
+        duplicate_index = next((i for i, existing in enumerate(distinct) if same_listing(existing)), None)
         if duplicate_index is None:
             distinct.append(item)
         else:
@@ -490,7 +602,11 @@ def candidate_links(product: Product) -> tuple[list[Candidate], Candidate | None
     if any(item.match_source == "enhanced" for item in distinct):
         # With extended matches present, verified listings must not be crowded out
         # of the list by cheaper, unverified ones. Within a tier, listings in stock come first.
-        sorted_candidates = sorted(distinct, key=lambda x: (x.status != "verified", unavailable(x), x.price if x.price else 999999))[:12]
+        # exact (verified) matches first, cheapest in-stock first; similar products follow, nearest first
+        exact_first = sorted((x for x in distinct if x.status == "verified"), key=lambda x: (unavailable(x), x.price if x.price else 999999))[:12]
+        others = sorted((x for x in distinct if x.status != "verified"),
+                        key=lambda x: (x.differences != [UNCONFIRMED_NOTE], -(x.closeness if x.closeness is not None else x.title_similarity), x.price if x.price else 999999))[:10]
+        sorted_candidates = exact_first + others
     else:
         sorted_candidates = sorted(distinct, key=lambda x: x.price if x.price else 999999)[:8]
     # An out-of-stock extended match is still the right product, but its price cannot be bought.
@@ -724,6 +840,8 @@ def record_candidate_prices(candidates: list[Candidate], now: datetime | None = 
         for candidate in candidates:
             if not candidate.price or candidate.price <= 0 or OUT_OF_STOCK_FLAG in candidate.match_flags:
                 continue
+            if candidate.relation == "similar" and candidate.differences != [UNCONFIRMED_NOTE]:
+                continue                                      # a different product's price is not this product's history
             last = db.execute("SELECT observed_at, price FROM observations WHERE url = ? ORDER BY observed_at DESC LIMIT 1",
                               (candidate.url,)).fetchone()
             if last and float(last[1]) == float(candidate.price):

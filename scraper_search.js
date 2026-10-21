@@ -37,7 +37,17 @@ function extractCardsInPage(opts) {
   const PRICE = /(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/gi;
   const NOISE_BEFORE_PRICE = /(?:emi|save|off|extra|cashback|from|starting|\/\s*month|per month)\s*[:\-]?\s*$/i;
   const abs = href => { try { return new URL(href, location.href).href.split('#')[0]; } catch (e) { return null; } };
-  const isProductLink = href => !!href && linkContains.some(p => href.includes(p));
+  const auto = linkContains.includes('*');                     // no known URL pattern: judge a link by its shape
+  const looksLikeProduct = href => {
+    try {
+      const u = new URL(href);
+      if (u.origin !== location.origin) return false;
+      const path = u.pathname;
+      if (path.length < 14 || /\/(search|cart|login|account|wishlist|checkout|help|about|contact|offers?|stores?|brands?|categor(y|ies)|collections?|blogs?|pages?)(\/|$)/i.test(path)) return false;
+      return /\/(products?|p|pd|item|buy)\//i.test(path) || /\d{4,}/.test(path) || /-[a-z0-9]{8,}$/i.test(path);
+    } catch (e) { return false; }
+  };
+  const isProductLink = href => !!href && (auto ? looksLikeProduct(href) : linkContains.some(p => href.includes(p)));
   const canonical = href => href.replace(/\/ref=[^/?]*/i, '').replace(/[?&](?:ref|pf_rd_[a-z]+|pd_rd_[a-z]+|qid|sr|sprefix|crid|lid|otracker\d*|marketplace|spid|srno|fm|iid|ssid|cmpid|cmp)=[^&]*/gi, '').replace(/\?&/, '?').replace(/\?$/, '');
 
   const prices = text => {
@@ -207,8 +217,7 @@ function makeGate(limit) {
 }
 
 async function launch() {
-  const puppeteer = require('puppeteer');
-  return puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--window-size=1280,900'] });
+  return require('./browser_launch').launchQuiet(require('puppeteer'));
 }
 
 async function searchStores({ queries, stores, per_store = 8 }) {
@@ -229,7 +238,12 @@ async function searchStores({ queries, stores, per_store = 8 }) {
       });
       return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
     };
-    const results = await Promise.all(wanted.map(s => withDeadline(s, searchOneStore(browser, s, queries, per_store, gate))));
+    // Each store's answer is printed the moment it is in ({"store_done": ...}), so the caller can show it at once;
+    // the complete result is still printed last.
+    const results = await Promise.all(wanted.map(s => withDeadline(s, searchOneStore(browser, s, queries, per_store, gate)).then(r => {
+      process.stdout.write(JSON.stringify({ store_done: r.report, items: r.items }) + '\n');
+      return r;
+    })));
     return { stores: results.map(r => r.report), matches: results.flatMap(r => r.items) };
   } finally {
     await browser.close().catch(() => {});
@@ -283,11 +297,11 @@ async function deepVisit({ urls }) {
       try {
         page = await newPage(browser);
         const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        if (response && response.status() >= 400) return { platform, url, status: `http_${response.status()}` };
+        if (response && response.status() >= 400) return { platform, url, final_url: page.url(), status: `http_${response.status()}` };
         await sleep((STORES[platform] && STORES[platform].settle_ms) ? Math.min(STORES[platform].settle_ms, 3000) : 1500);
         const blocked = await page.evaluate(re => new RegExp(re, 'i').test((document.body ? document.body.innerText : '').slice(0, 2500)), BLOCK_RE.source).catch(() => false);
         if (blocked) return { platform, url, status: 'blocked' };
-        return { platform, url, status: 'ok', ...(await page.evaluate(extractProductInPage)) };
+        return { platform, url, final_url: page.url(), status: 'ok', ...(await page.evaluate(extractProductInPage)) };
       } catch (e) {
         return { platform, url, status: `error: ${String(e.message || e).slice(0, 80)}` };
       } finally {

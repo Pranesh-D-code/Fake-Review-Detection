@@ -3,3 +3,8 @@
 node_modules/
 __pycache__/
 *.pyc
+data/external/
+models/visual/*
+!models/visual/calibration.json
+!models/visual/evaluation.json
+data/visual_eval/

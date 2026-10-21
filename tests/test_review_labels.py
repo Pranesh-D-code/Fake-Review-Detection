@@ -166,7 +166,7 @@ def test_training_script_uses_person_labels(tmp_db, tmp_path, monkeypatch):
 
     out = tmp_path / "out"
     monkeypatch.setattr(sys, "argv", ["train", "--db", str(tmp_db), "--out-dir", str(out), "--jobs", "1",
-                                      "--holdout-categories", "0", "--max-features", "2000"])
+                                      "--holdout-categories", "0", "--max-features", "2000", "--no-extra"])
     trainer.main()
     report = json.loads((out / "review_detector.metrics.json").read_text(encoding="utf-8"))
     assert report["live_labels_total"] == 24 and report["live_labels_in_training"] == 24
@@ -175,7 +175,7 @@ def test_training_script_uses_person_labels(tmp_db, tmp_path, monkeypatch):
 
     # with labels switched off the same data trains on the dataset alone
     monkeypatch.setattr(sys, "argv", ["train", "--db", str(tmp_db), "--out-dir", str(tmp_path / "out2"), "--jobs", "1",
-                                      "--holdout-categories", "0", "--max-features", "2000", "--no-live-labels"])
+                                      "--holdout-categories", "0", "--max-features", "2000", "--no-live-labels", "--no-extra"])
     trainer.main()
     plain = json.loads((tmp_path / "out2" / "review_detector.metrics.json").read_text(encoding="utf-8"))
     assert plain["live_labels_in_training"] == 0

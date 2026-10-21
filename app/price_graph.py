@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
 
 from . import engines
-from .matcher import OUT_OF_STOCK_FLAG
+from .matcher import OUT_OF_STOCK_FLAG, UNCONFIRMED_NOTE
 from .store_registry import canonical_store
 
 BASE_CURRENCY = "INR"
@@ -125,6 +125,8 @@ def build_price_comparison(
         store = canonical_store(candidate.platform, candidate.url)
         if store.casefold() == source_store.casefold():
             continue
+        if getattr(candidate, "relation", "exact") == "similar" and getattr(candidate, "differences", []) != [UNCONFIRMED_NOTE]:
+            continue                    # a similar product is listed on its own; its price is not this product's price
         entry = _entry(
             store=store, kind="verified" if candidate.status == "verified" else "possible",
             title=candidate.title, url=candidate.url, price=candidate.price, currency=BASE_CURRENCY,

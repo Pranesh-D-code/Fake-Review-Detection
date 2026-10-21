@@ -131,12 +131,14 @@ def test_gtin_match_does_not_hide_a_conflicting_mpn():
 def test_multistore_applies_source_identifiers_to_opened_pages(monkeypatch):
     details = [_deep(CROMA, price=21999.0, gtin=EAN_B, mpn="SM-M366B"), _deep(VIJAY, price=23499.0, gtin=EAN_A, mpn="SM-M366B")]
     matches, attempts, _ = _run(monkeypatch, [CROMA, VIJAY], details, source_gtin=EAN_A, source_mpn="SM-M366B")
-    assert [m["platform"] for m in matches] == ["Vijay Sales"]              # Croma's GTIN conflicts: dropped
-    vijay = matches[0]
-    assert vijay["match_status"] == "verified" and vijay["gtin"] == EAN_A
+    # Croma's GTIN conflicts: it is not the same product, but the same title with another EAN is a close sibling (another colour / pack)
+    assert sorted(m["platform"] for m in matches) == ["Croma", "Vijay Sales"]
+    vijay = next(m for m in matches if m["platform"] == "Vijay Sales")
+    assert vijay["match_status"] == "verified" and vijay["relation"] == "exact" and vijay["gtin"] == EAN_A
     assert any("GTIN/EAN" in r for r in vijay["match_reasons"])
-    croma_attempt = next(a for a in attempts if a["platform"] == "Croma")
-    assert croma_attempt["result_count"] == 0 and croma_attempt["filtered_out"] == 1
+    croma = next(m for m in matches if m["platform"] == "Croma")
+    assert croma["match_status"] != "verified" and croma["relation"] == "similar"
+    assert "different manufacturer part number" in croma["differences"]
 
 
 def test_multistore_without_source_identifiers_behaves_as_before(monkeypatch):

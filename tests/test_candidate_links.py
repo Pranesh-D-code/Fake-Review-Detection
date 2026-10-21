@@ -18,7 +18,8 @@ def _extended(platform, title, price, url, status, score):
     return {"platform": platform, "title": title, "url": url, "price": price, "image_url": None, "reviews": [],
             "match_source": "enhanced", "match_status": status, "match_score": score,
             "match_reasons": ["model code m36 matches"] if status == "verified" else [],
-            "match_flags": [] if status == "verified" else ["different specification"], "title_similarity": 0.6}
+            "match_flags": [] if status == "verified" else ["different specification"], "title_similarity": 0.6,
+            "differences": [] if status == "verified" else ["storage 256 GB instead of 128 GB"], "closeness": 0.9}
 
 
 def test_legacy_rules_still_apply_to_legacy_matches(monkeypatch):
@@ -42,8 +43,10 @@ def test_extended_matches_pass_through_and_verified_comes_first(monkeypatch):
     candidates, lowest = engines.candidate_links(product)
     assert [c.platform for c in candidates] == ["Croma", "Vijay Sales"]      # verified first even though pricier
     assert candidates[0].status == "verified" and candidates[0].match_score == 0.88
-    assert candidates[1].status == "candidate" and "different specification" in candidates[1].reason
-    assert lowest.platform == "Croma"
+    assert candidates[1].status == "candidate" and candidates[1].relation == "similar"
+    assert candidates[1].differences == ["storage 256 GB instead of 128 GB"] and "256 GB" in candidates[1].reason
+    assert candidates[0].relation == "exact" and candidates[0].differences == []
+    assert lowest.platform == "Croma"                       # a cheaper similar product never becomes the lowest verified price
 
 
 def test_same_store_duplicates_keep_the_stronger_evidence(monkeypatch):

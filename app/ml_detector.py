@@ -247,6 +247,12 @@ def assess(
 
     thresholds = bundle["meta"]["thresholds"]
     suspicious_at, genuine_below = float(thresholds["suspicious_at"]), float(thresholds["genuine_below"])
+    # Live reviews are shorter and written in other English than the training data, so the flag never goes below
+    # REVIEW_FLAG_MIN_PROBABILITY (default 0.9) even if training chose a lower cut-off.
+    try:
+        suspicious_at = max(suspicious_at, float(os.getenv("REVIEW_FLAG_MIN_PROBABILITY", "0.9")))
+    except ValueError:
+        pass
     signals = list(heuristic_signals)
     percent = round(probability * 100)
 

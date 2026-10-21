@@ -21,6 +21,7 @@ leave-one-category-out numbers are included as a rough domain-shift probe.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sqlite3
@@ -114,6 +115,39 @@ def load_live_labels(db_path: Path):
     return texts, np.array(labels, dtype=int)
 
 
+def read_external_rows(entry: dict, base: Path):
+    """(texts, labels 0/1) of one manifest entry (Parquet or CSV); rows with an unknown label or empty text are skipped."""
+    rows = []
+    for item in entry["files"]:
+        path = base / item["file"]
+        if path.suffix == ".parquet":
+            import pyarrow.parquet as pq
+            table = pq.read_table(path).to_pydict()
+            rows += list(zip(table[entry["text_col"]], table[entry["label_col"]]))
+        else:
+            csv.field_size_limit(sys.maxsize)
+            with path.open(encoding="utf-8", newline="") as handle:
+                rows += [(r[entry["text_col"]], r[entry["label_col"]]) for r in csv.DictReader(handle)]
+    label_map = {str(k): int(v) for k, v in entry["label_map"].items()}
+    texts, labels = [], []
+    for text, label in rows:
+        if text and str(text).strip() and str(label) in label_map:
+            texts.append(str(text).strip())
+            labels.append(label_map[str(label)])
+    return texts, np.array(labels, dtype=int)
+
+
+def balance_weights(weights: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """Scale the larger class down so fake and real carry equal total weight (the modern sets add many fakes)."""
+    out = weights.astype(float).copy()
+    fake, real = out[labels == 1].sum(), out[labels == 0].sum()
+    if fake > real > 0:
+        out[labels == 1] *= real / fake
+    elif real > fake > 0:
+        out[labels == 0] *= fake / real
+    return out
+
+
 def build_pipeline(c_value: float, max_features: int) -> Pipeline:
     features = FeatureUnion([
         ("word", TfidfVectorizer(
@@ -157,6 +191,16 @@ def threshold_for_precision(y_true, prob, target: float) -> float:
         if flagged.sum() >= 30 and precision_score(y_true, flagged.astype(int), zero_division=0) >= target:
             return float(threshold)
     return 0.99
+
+
+def threshold_for_fpr(y_true, prob, max_fpr: float) -> float:
+    """Cut-off above which at most ``max_fpr`` of the validation originals (real reviews) fall.
+
+    Precision on a balanced validation set flatters a detector that will mostly see real reviews, so the flag
+    threshold must also keep the share of real reviews it wrongly flags small.
+    """
+    reals = prob[y_true == 0]
+    return float(np.quantile(reals, 1 - max_fpr)) if len(reals) else 0.99
 
 
 def threshold_for_genuine(y_true, prob, target: float) -> float:
@@ -208,6 +252,8 @@ def main() -> None:
     parser.add_argument("--max-features", type=int, default=150_000, help="per vectoriser")
     parser.add_argument("--suspicious-precision", type=float, default=0.98,
                         help="validation precision required before a review is called 'suspicious'")
+    parser.add_argument("--max-false-positive-rate", type=float, default=0.02,
+                        help="share of validation real reviews the 'suspicious' flag may wrongly catch")
     parser.add_argument("--genuine-purity", type=float, default=0.98,
                         help="validation share of original reviews required below the 'genuine-looking' cut-off")
     parser.add_argument("--jobs", type=int, default=4, help="parallel model fits")
@@ -217,6 +263,10 @@ def main() -> None:
                         help="how much more each person-labelled review counts than a dataset row")
     parser.add_argument("--min-live-labels", type=int, default=10,
                         help="ignore person labels until at least this many exist (a handful only adds noise)")
+    parser.add_argument("--extra-manifest", type=Path, default=ROOT / "data" / "external" / "manifest.json",
+                        help="datasets downloaded by scripts/fetch_review_datasets.py")
+    parser.add_argument("--no-extra", action="store_true", help="ignore the downloaded datasets")
+    parser.add_argument("--max-per-extra", type=int, default=15000, help="rows used from each downloaded training dataset")
     parser.add_argument("--holdout-categories", type=int, default=3,
                         help="categories to hold out in the domain-shift probe (0 disables it)")
     args = parser.parse_args()
@@ -228,6 +278,35 @@ def main() -> None:
 
     sources = np.array(["dataset"] * len(texts))
     weights = np.ones(len(texts))
+    extra_info: list[dict] = []
+    eval_sets: list[dict] = []
+    if not args.no_extra and args.extra_manifest.is_file():
+        manifest = json.loads(args.extra_manifest.read_text(encoding="utf-8"))["datasets"]
+        known_texts = {normalise_text(t) for t in texts}                 # a text already in the Kaggle set is not added twice
+        rng = np.random.default_rng(args.seed)
+        for entry in manifest:
+            e_texts, e_labels = read_external_rows(entry, args.extra_manifest.parent)
+            if entry["role"] == "eval":
+                eval_sets.append({"name": entry["name"], "texts": e_texts, "labels": e_labels, "license": entry["license"]})
+                print(f"Held out for evaluation only: {entry['name']} ({len(e_texts)} rows)")
+                continue
+            keep = [i for i, t in enumerate(e_texts) if normalise_text(t) not in known_texts]
+            if len(keep) > args.max_per_extra:
+                keep = sorted(rng.choice(keep, args.max_per_extra, replace=False).tolist())
+            for i in keep:
+                known_texts.add(normalise_text(e_texts[i]))
+            picked_labels = e_labels[keep]
+            texts = texts + [e_texts[i] for i in keep]
+            labels = np.concatenate([labels, picked_labels])
+            categories = np.concatenate([categories, np.array([entry["name"]] * len(keep))])
+            sources = np.concatenate([sources, np.array([entry["name"]] * len(keep))])
+            weights = np.concatenate([weights, np.ones(len(keep))])
+            extra_info.append({"name": entry["name"], "license": entry["license"], "source_url": entry.get("source_url"),
+                               "rows_used": len(keep), "fake": int(picked_labels.sum()), "real": int((1 - picked_labels).sum())})
+            print(f"Added {entry['name']}: {len(keep)} new rows ({int(picked_labels.sum())} fake, {int((1 - picked_labels).sum())} real)")
+        if extra_info:
+            weights = balance_weights(weights, labels)
+            print(f"Class weights balanced: fake total {weights[labels == 1].sum():.0f}, real total {weights[labels == 0].sum():.0f}")
     live_available = live_used = 0
     if not args.no_live_labels:
         live_texts, live_labels = load_live_labels(args.db)
@@ -275,7 +354,8 @@ def main() -> None:
     # requires high validation precision, and "genuine-looking" requires a high
     # share of original rows below the cut-off; everything between is "needs-review".
     thresholds = {
-        "suspicious_at": threshold_for_precision(y_val, val_prob, args.suspicious_precision),
+        "suspicious_at": round(max(threshold_for_precision(y_val, val_prob, args.suspicious_precision),
+                                   threshold_for_fpr(y_val, val_prob, args.max_false_positive_rate), 0.5), 4),
         "genuine_below": threshold_for_genuine(y_val, val_prob, args.genuine_purity),
     }
     print(f"Thresholds from validation: {thresholds}")
@@ -296,7 +376,7 @@ def main() -> None:
 
     dataset_rows = sources[test_idx] == "dataset"
     results["test_dataset_only"] = full_metrics(y_test[dataset_rows], test_prob[dataset_rows])
-    live_rows = ~dataset_rows
+    live_rows = sources[test_idx] == "live"
     if live_rows.sum() >= 5 and len(set(y_test[live_rows])) == 2:
         results["live_test"] = {"rows": int(live_rows.sum()), **metrics_at(y_test[live_rows], test_prob[live_rows], 0.5)}
     else:
@@ -305,6 +385,52 @@ def main() -> None:
 
     print("Scoring the existing rule-based baseline on the same test rows...")
     results["rule_based_baseline_on_test"] = heuristic_baseline(x_test, y_test)
+
+    flag = thresholds["suspicious_at"]
+    per_source = {}
+    for name in sorted(set(sources[test_idx])):
+        rows_mask = sources[test_idx] == name
+        fakes = rows_mask & (y_test == 1)
+        reals = rows_mask & (y_test == 0)
+        per_source[name] = {
+            "test_rows": int(rows_mask.sum()),
+            "fake_recall_at_flag_threshold": round(float((test_prob[fakes] >= flag).mean()), 4) if fakes.any() else None,
+            "fake_recall_at_0.5": round(float((test_prob[fakes] >= 0.5).mean()), 4) if fakes.any() else None,
+            "real_wrongly_flagged": round(float((test_prob[reals] >= flag).mean()), 4) if reals.any() else None,
+        }
+    results["per_source_test"] = per_source
+
+    def recall_report(model, test_sources) -> dict:
+        """How a model does on the held-out fakes of each named source, and on the held-out Kaggle originals."""
+        prob = model.predict_proba(x_test)[:, 1]
+        report = {}
+        for name in test_sources:
+            fakes = (sources[test_idx] == name) & (y_test == 1)
+            if fakes.any():
+                report[name] = round(float((prob[fakes] >= 0.5).mean()), 4)
+        reals = (sources[test_idx] == "dataset") & (y_test == 0)
+        report["real_wrongly_flagged_at_0.5"] = round(float((prob[reals] >= 0.5).mean()), 4)
+        return report
+
+    generators = [info["name"] for info in extra_info]
+    probes = {}
+    if generators:
+        train_sources = sources[train_idx]
+
+        def fit_without(excluded: list[str]):
+            mask = ~np.isin(train_sources, excluded)
+            ids = train_idx[mask]
+            sub_weights = balance_weights(weights[ids], labels[ids])
+            return build_pipeline(chosen_c, args.max_features).fit([texts[i] for i in ids], labels[ids], clf__sample_weight=sub_weights)
+
+        # "kaggle_only" = what the model could do before these datasets existed; "without_X" = a generator it never saw.
+        plan = {"kaggle_only (trained without any modern generator)": generators + ["live"]}
+        plan.update({f"never_saw_{name}": [name] for name in generators})
+        outcomes = Parallel(n_jobs=min(args.jobs, 3))(delayed(lambda ex: recall_report(fit_without(ex), ["dataset"] + generators))(ex) for ex in plan.values())
+        probes = dict(zip(plan.keys(), outcomes))
+        for name, outcome in probes.items():
+            print(f"  probe {name}: fakes caught at 0.5 -> " + ", ".join(f"{k} {v:.1%}" for k, v in outcome.items()))
+    results["generalisation_probes"] = probes
 
     shift = {}
     if args.holdout_categories > 0:
@@ -329,6 +455,19 @@ def main() -> None:
         x_train + x_val, np.concatenate([y_train, y_val]), clf__sample_weight=np.concatenate([w_train, w_val]))
     words = np.array([len(t.split()) for t in texts])
 
+    # Datasets the model never trained on (different domain and style): how far does it carry over?
+    results["evaluation_only_sets"] = {}
+    for item in eval_sets:
+        prob = final.predict_proba(item["texts"])[:, 1]
+        y = item["labels"]
+        results["evaluation_only_sets"][item["name"]] = {
+            "rows": int(len(y)), "license": item["license"],
+            "accuracy_at_0.5": round(float(((prob >= 0.5) == (y == 1)).mean()), 4),
+            "fake_recall_at_flag_threshold": round(float((prob[y == 1] >= flag).mean()), 4),
+            "real_wrongly_flagged": round(float((prob[y == 0] >= flag).mean()), 4),
+        }
+        print(f"  evaluation-only {item['name']}: {results['evaluation_only_sets'][item['name']]}")
+
     meta = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "sklearn_version": sklearn.__version__,
@@ -336,6 +475,7 @@ def main() -> None:
         "label_mapping": mapping,
         "positive_class": FAKE_NORMALIZED_LABEL,
         "rows": {"total": len(texts), "train": len(x_train), "validation": len(x_val), "test": len(x_test), "live": live_used},
+        "extra_datasets": extra_info,
         "live_labels_total": live_available,             # person labels that existed when this model was trained
         "live_labels_in_training": live_used,
         "live_weight": args.live_weight if live_used else None,
@@ -345,7 +485,8 @@ def main() -> None:
         "seed": args.seed,
         "caveat": (
             "Trained to separate original from computer-generated reviews in one labelled English "
-            "dataset" + (f" plus {live_used} reviews a person labelled real or fake in this app" if live_used else "") + ". "
+            "dataset" + (f" plus fakes written by present-day LLMs ({', '.join(i['name'] for i in extra_info)})" if extra_info else "")
+            + (f" plus {live_used} reviews a person labelled real or fake in this app" if live_used else "") + ". "
             "Output is a text-style likelihood, not proof that a review is fake, and it "
             + ("was checked on only a handful of person-labelled live reviews." if live_used
                else "has not been validated on live marketplace reviews.")

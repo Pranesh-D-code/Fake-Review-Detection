@@ -91,16 +91,7 @@ function parseUrlSlug(url) {
 (async () => {
   let browser = null;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--window-position=-10000,-10000',
-        '--window-size=1280,800',
-        '--disable-gpu'
-      ]
-    });
+    browser = await require('./browser_launch').launchQuiet(puppeteer);     // no window can open: headless shell build
 
     const page = await browser.newPage();
     await configurePage(page);
